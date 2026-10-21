@@ -64,23 +64,12 @@ Opening, after the first start (which unpacks the runtime and indexes the fonts,
 - **Loading sdkjs** uses V8's code cache (`sdkjs/word/sdk-all.cache`, written by doctrenderer on the first start): 2.0 s without it, 0.5–0.6 s with it on the emulator.
 - **V8 startup snapshot** (doctrenderer's `sdk-all.bin`, the role of ONLYOFFICE's `libbootstrap`): tried and left out. It has to be created on the device (it belongs to the V8 build), takes 1.3 s and 6.8 MB, and saved only 50–70 ms per open over the code cache: most of the remaining time is sdkjs reading the document and compiling functions on first use, which neither covers. A damaged snapshot file would also crash V8 on every start.
 
-## Spreadsheets (spike, step 5)
+## Spreadsheets
 
-**Question:** can the spreadsheet editor draw a sheet and be edited without a browser, so that it fits the same engine and tile renderer as documents and presentations?
+`engine.js` has its own adapter for spreadsheets (`spreadsheetEngine`), started from the step 5 spike.
 
-**Answer: yes.** `engine.js` has a spike adapter (`spreadsheetEngine`): page 0 is the used range of the active sheet. The app doesn't use it yet (`CellsActivity` is still the placeholder).
-
-| Check | Result (desktop, `sample.xlsx`: 175 columns × 689 rows of formats) |
-|---|---|
-| Draw | `WorksheetView.drawForPrint` with a print page (`CPagePrint`) made of the cells under a tile, into the tile's `CNativeGraphics` (`CPdfPrinter.DocumentRenderer`). Values, number formats, fills, borders, pivot tables, charts and slicers render; grid lines optional. Whole sheet at 7633 × 8074 px: 0.6 s; 256 px tiles: 7.5 ms each on average. |
-| Charts | Need `asc_nativeCalculateFile()` after opening (prepares the drawing objects). |
-| Edit a cell | `WorksheetView._saveCellValueAfterEdit(range, [Fragment])`, the cell editor's commit, works without the DOM: a new fee recalculates the `SUMIF` total ($1,005,230 → $1,050,730), formulas work (`=F15*2`), undo restores both. |
-| Format | `asc_setCellBold` etc. on the selection set with `WorksheetView.setSelection`. |
-| Not usable | The web cell editor (`asc_enterText` → `CellEditor`) and the events controller depend on the DOM set up by the web editor. |
-
-**Design for the cells editor:**
-- The sheet is one large page; tiles draw the cells under them through the print path (as above). Several sheets are pages or a sheet switcher.
-- Taps map to cells with the column and row positions (`_getColLeft`, `_getRowTop`); the app draws the selection and its handles itself.
-- Editing a cell happens in a native text field (in place or as a formula bar) and is committed with `_saveCellValueAfterEdit`; the toolbar commands (`asc_setCellBold`, ...) act on the selection.
-- Frozen panes and row/column headings are drawn by the app from the same positions.
-
+- **Drawing.** The active sheet is one page: its used cells plus empty ones to type into. Tiles are drawn by the print path: `WorksheetView.drawForPrint` with a print page (`CPagePrint`) made of the cells under the tile, into the tile's `CNativeGraphics`. Values, formats, table styles, pivot tables, charts and slicers render. `asc_nativeCalculateFile()` after opening prepares the drawing objects.
+- **Geometry.** The column and row boundaries (mm) come with the state when they change; the app draws the headings and the selection from them and maps taps to cells (`SheetView`).
+- **Editing.** The web cell editor (`CellEditor`) and the events controller depend on the DOM, so cells are edited in a native field and committed with `WorksheetView._saveCellValueAfterEdit(range, [Fragment])`, the cell editor's own commit (formulas, recalculation and undo work). `selectCells(..., enterText)` enters and moves in one command, so the state reports both.
+- **Commands.** `selectCells`, `setCellText`, `clearCells`, `setActiveSheet`, the toolbar commands (`asc_setCellBold`, `asc_setCellAlign`, ... with the paragraph alignment values), undo/redo, copy/cut/paste and saving (xlsx, xlsm, xltx, xltm, ods, ots, csv). `getState` has the fields of the text editors' state plus `sheet`.
+- **Known:** wrapped text in a row with a fixed height runs into the next row (the print path doesn't clip it); a single page of a very large sheet (thousands of pixels each way) loses table styles, which tiles don't.
