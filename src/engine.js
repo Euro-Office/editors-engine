@@ -519,6 +519,11 @@ function createHitContext() {
 			state["format"] = {};
 		}
 		try {
+			state["structure"] = isPresentation ? null : structureState();
+		} catch (e) {
+			state["structure"] = null;
+		}
+		try {
 			state["link"] = linkAtCursor();
 		} catch (e) {
 			state["link"] = null;
@@ -887,6 +892,215 @@ function createHitContext() {
 		}
 		allPagesChanged();
 	};
+
+	// ---------------------------------------------------------------------------------
+	// Document structure (documents): tables, breaks, headers and footers, page setup,
+	// notes, table of contents, outline, statistics, track changes
+
+	function selectedElement(type) {
+		var elements = api.getSelectedElements() || [];
+		for (var i = 0; i < elements.length; i++) {
+			if (elements[i].get_ObjectType() === type)
+				return elements[i].get_ObjectValue();
+		}
+		return null;
+	}
+
+	engine["insertTable"] = function (cols, rows) { api.put_Table(cols, rows); };
+	var tableActions = {
+		"rowAbove": function () { api.addRowAbove(1); },
+		"rowBelow": function () { api.addRowBelow(1); },
+		"columnLeft": function () { api.addColumnLeft(1); },
+		"columnRight": function () { api.addColumnRight(1); },
+		"deleteRow": function () { api.remRow(); },
+		"deleteColumn": function () { api.remColumn(); },
+		"deleteTable": function () { api.remTable(); },
+		"merge": function () { if (api.CheckBeforeMergeCells()) api.MergeCells(); },
+		"split": function () { if (api.CheckBeforeSplitCells()) api.SplitCell(2, 1); },
+		"select": function () { api.selectTable(); }
+	};
+	engine["tableAction"] = function (name) { tableActions[name](); };
+
+	// Asc.c_oAscSectionBreakType: 0 next page, 3 continuous
+	engine["insertBreak"] = function (kind) {
+		if (kind === "page") {
+			api.put_AddPageBreak();
+		} else if (kind === "column") {
+			api.put_AddColumnBreak();
+		} else if (kind === "sectionNextPage") {
+			api.add_SectionBreak(0);
+		} else if (kind === "sectionContinuous") {
+			api.add_SectionBreak(3);
+		} else if (kind === "line") {
+			// As put_AddPageBreak; there is no API call for it
+			if (logicDocument.IsSelectionLocked(AscCommon.changestype_Paragraph_Content))
+				return;
+			logicDocument.StartAction(AscDFH.historydescription_Document_AddPageBreak);
+			logicDocument.AddToParagraph(new AscWord.CRunBreak(AscWord.break_Line));
+			logicDocument.FinalizeAction();
+		}
+	};
+
+	// Headers and footers: a double tap in their area edits them, as does this for the page
+	engine["editHeaderFooter"] = function (page, footer) {
+		if (footer)
+			api.GoToFooter(page);
+		else
+			api.GoToHeader(page);
+		allPagesChanged();
+	};
+	engine["endHeaderFooter"] = function () {
+		api.asc_CancelHdrFtrEditing();
+		allPagesChanged();
+	};
+	engine["setHeaderFooterOption"] = function (name, value) {
+		if (name === "differentFirst")
+			api.HeadersAndFooters_DifferentFirstPage(value);
+		else if (name === "differentOddEven")
+			api.HeadersAndFooters_DifferentOddandEvenPage(value);
+		allPagesChanged();
+	};
+	// where: 1 header, 2 footer, -1 at the cursor; align: 0 right, 1 left, 2 center
+	engine["insertPageNumber"] = function (where, align) {
+		api.put_PageNum(where, align);
+		allPagesChanged();
+	};
+
+	// Page setup of the current section, in mm
+	engine["getPageSetup"] = function () {
+		var section = api.asc_GetSectionProps();
+		var columns = api.asc_GetColumnsProps();
+		return JSON.stringify({
+			"width": section.get_W(), "height": section.get_H(),
+			"landscape": section.get_Orientation() === 1,
+			"left": section.get_LeftMargin(), "top": section.get_TopMargin(),
+			"right": section.get_RightMargin(), "bottom": section.get_BottomMargin(),
+			"columns": columns ? columns.get_Num() : 1
+		});
+	};
+	// The size as portrait (width < height), in the current orientation
+	engine["setPageSetup"] = function (setup) {
+		if (setup["landscape"] !== undefined && setup["landscape"] !== (api.asc_GetSectionProps().get_Orientation() === 1))
+			api.change_PageOrient(!setup["landscape"]);
+		var section = api.asc_GetSectionProps();
+		if (setup["width"] !== undefined) {
+			var isLandscape = section.get_Orientation() === 1;
+			var shorter = Math.min(setup["width"], setup["height"]);
+			var longer = Math.max(setup["width"], setup["height"]);
+			section.put_W(isLandscape ? longer : shorter);
+			section.put_H(isLandscape ? shorter : longer);
+		}
+		if (setup["left"] !== undefined) {
+			section.put_LeftMargin(setup["left"]);
+			section.put_TopMargin(setup["top"]);
+			section.put_RightMargin(setup["right"]);
+			section.put_BottomMargin(setup["bottom"]);
+		}
+		api.asc_SetSectionProps(section);
+		if (setup["columns"] !== undefined) {
+			var columns = api.asc_GetColumnsProps();
+			columns.put_Num(setup["columns"]);
+			columns.put_EqualWidth(true);
+			api.asc_SetColumnsProps(columns);
+		}
+		allPagesChanged();
+	};
+
+	engine["addFootnote"] = function () { api.asc_AddFootnote(); };
+	engine["addEndnote"] = function () { api.asc_AddEndnote(); };
+	// From a note back to its reference in the text
+	engine["endNoteEditing"] = function () {
+		logicDocument.EndFootnotesEditing();
+		allPagesChanged();
+	};
+
+	engine["addTableOfContents"] = function () { api.asc_AddTableOfContents(null); };
+	engine["updateTableOfContents"] = function () { api.asc_UpdateTableOfContents(false); };
+
+	// Headings: [{text, level}]
+	engine["getOutline"] = function () {
+		var outline = api.asc_ShowDocumentOutline();
+		var result = [];
+		for (var i = 0; i < outline.get_ElementsCount(); i++) {
+			if (i === 0 && outline.isFirstItemNotHeader())
+				continue;
+			var text = (outline.get_Text(i) || "").trim();
+			if (text)
+				result.push({ "index": i, "text": text, "level": outline.get_Level(i) });
+		}
+		api.asc_HideDocumentOutline();
+		return JSON.stringify(result);
+	};
+	engine["gotoOutline"] = function (index) {
+		var outline = api.asc_ShowDocumentOutline();
+		outline.goto(index);
+		api.asc_HideDocumentOutline();
+	};
+
+	// Counted now (sdkjs counts in timer steps; this is the document builder's way)
+	engine["getStatistics"] = function () {
+		var statistics = logicDocument.Statistics;
+		statistics.StartPos = 0;
+		statistics.CurPage = 0;
+		statistics.Pages = 0;
+		statistics.Words = 0;
+		statistics.Paragraphs = 0;
+		statistics.SymbolsWOSpaces = 0;
+		statistics.SymbolsWhSpaces = 0;
+		statistics.Update_Pages(logicDocument.Pages.length);
+		for (var page = 0; page < logicDocument.Pages.length; page++)
+			logicDocument.DrawingObjects.documentStatistics(page, statistics);
+		logicDocument.Content.forEach(function (element) { element.CollectDocumentStatistics(statistics); });
+		return JSON.stringify({
+			"pages": statistics.Pages, "words": statistics.Words, "paragraphs": statistics.Paragraphs,
+			"symbols": statistics.SymbolsWOSpaces, "symbolsWithSpaces": statistics.SymbolsWhSpaces
+		});
+	};
+
+	// Track changes; the change at the cursor (selected by next/previous) is in the state
+	var revisions = [];
+	api.asc_registerCallback("asc_onShowRevisionsChange", function (changes) {
+		revisions = changes || [];
+	});
+	engine["setTrackChanges"] = function (value) { api.asc_SetTrackRevisions(value); };
+	engine["reviewAction"] = function (name) {
+		if (name === "next")
+			api.asc_GetNextRevisionsChange();
+		else if (name === "previous")
+			api.asc_GetPrevRevisionsChange();
+		else if (name === "accept")
+			api.asc_AcceptChangesBySelection(true);
+		else if (name === "reject")
+			api.asc_RejectChangesBySelection(true);
+		else if (name === "acceptAll")
+			api.asc_AcceptAllChanges();
+		else if (name === "rejectAll")
+			api.asc_RejectAllChanges();
+		allPagesChanged();
+	};
+	// Asc.c_oAscDisplayModeInReview: 0 markup, 1 final, 2 original
+	engine["setReviewMode"] = function (mode) {
+		api.asc_SetDisplayModeInReview(mode);
+		allPagesChanged();
+	};
+
+	function structureState() {
+		var header = selectedElement(Asc.c_oAscTypeSelectElement.Header);
+		var change = revisions[0];
+		return {
+			"inTable": !!selectedElement(Asc.c_oAscTypeSelectElement.Table),
+			"inHeaderFooter": !!header,
+			"differentFirst": !!(header && header.get_DifferentFirst && header.get_DifferentFirst()),
+			"differentOddEven": !!(header && header.get_DifferentEvenOdd && header.get_DifferentEvenOdd()),
+			"inNote": !!(api.asc_IsCursorInFootnote() || api.asc_IsCursorInEndnote()),
+			"trackChanges": !!api.asc_IsTrackRevisions(),
+			"hasChanges": !!api.asc_HaveRevisionsChanges(),
+			"change": change ? {
+				"type": change.get_Type(), "user": change.get_UserName() || "",
+				"date": String(change.get_DateTime() || ""), "text": typeof change.get_Value() === "string" ? change.get_Value() : ""
+			} : null
+		};
+	}
 
 	// Toolbar commands
 	engine["setBold"] = function (value) { api.put_TextPrBold(value); };

@@ -67,6 +67,19 @@ namespace
 	document.RenderTile(0, pageWidth, pageHeight, 0, 0, pageWidth, pageHeight, whole.data(), false);
 	std::cout << "page 1 in one piece (" << pageWidth << " x " << pageHeight << "): " << MillisecondsSince(start) << " ms" << std::endl;
 	SavePng(whole, pageWidth, pageHeight, outDir + "/page1.png");
+	// EO_ALL_PAGES=1: every page as page<n>.png
+	if (getenv("EO_ALL_PAGES"))
+	{
+		for (int i = 1; i < pageCount; ++i)
+		{
+			eo::PageSize other = document.GetPageSize(i);
+			const int w = (int)(other.widthMm / 25.4 * 96 * scale + 0.5);
+			const int h = (int)(other.heightMm / 25.4 * 96 * scale + 0.5);
+			std::vector<unsigned char> pixels(4 * w * h);
+			document.RenderTile(i, w, h, 0, 0, w, h, pixels.data(), false);
+			SavePng(pixels, w, h, outDir + "/page" + std::to_string(i + 1) + ".png");
+		}
+	}
 
 	const int tileSize = 256;
 	std::vector<unsigned char> tiled(4 * pageWidth * pageHeight);
