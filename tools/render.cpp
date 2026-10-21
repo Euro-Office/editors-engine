@@ -178,9 +178,11 @@ int main(int argc, char* argv[])
 		eo::Document document;
 
 		auto start = std::chrono::steady_clock::now();
-		if (!document.Open(ToWide(argv[2]), ToWide(outDir + "/tmp")))
+		const char* password = getenv("EO_PASSWORD");
+		int opened = document.Open(ToWide(argv[2]), ToWide(outDir + "/tmp"), password ? ToWide(password) : L"");
+		if (opened != 0)
 		{
-			std::cerr << "open failed" << std::endl;
+			std::cerr << (opened == eo::Document::ERROR_PASSWORD ? "needs a password" : "open failed") << " (" << opened << ")" << std::endl;
 			return 2;
 		}
 		std::cout << "open + layout: " << MillisecondsSince(start) << " ms" << std::endl;
@@ -192,7 +194,11 @@ int main(int argc, char* argv[])
 			if (arg.size() < 3 || arg.substr(arg.size() - 3) != ".js")
 			{
 				start = std::chrono::steady_clock::now();
-				int error = document.Save(ToWide(arg), ToWide(arg.substr(arg.find_last_of('.') + 1)));
+				// EO_SAVE_PASSWORD: saved encrypted with it
+				const char* savePassword = getenv("EO_SAVE_PASSWORD");
+				std::wstring extension = ToWide(arg.substr(arg.find_last_of('.') + 1));
+				int error = savePassword ? document.SaveWithPassword(ToWide(arg), extension, ToWide(savePassword))
+				                         : document.Save(ToWide(arg), extension);
 				std::cout << "save " << arg << " (" << MillisecondsSince(start) << " ms): " << error << std::endl;
 				continue;
 			}

@@ -63,10 +63,12 @@ extern "C"
 		delete FromHandle(handle);
 	}
 
-	JNIEXPORT jboolean JNICALL
-	Java_lib_editors_base_engine_NativeEngine_nativeOpen(JNIEnv* env, jobject, jlong handle, jstring path, jstring tempDir)
+	// 0, the x2t error code (eo::Document::ERROR_PASSWORD) or -1
+	JNIEXPORT jint JNICALL
+	Java_lib_editors_base_engine_NativeEngine_nativeOpen(JNIEnv* env, jobject, jlong handle, jstring path, jstring tempDir,
+	                                                    jstring password)
 	{
-		return FromHandle(handle)->Open(ToWide(env, path), ToWide(env, tempDir)) ? JNI_TRUE : JNI_FALSE;
+		return FromHandle(handle)->Open(ToWide(env, path), ToWide(env, tempDir), ToWide(env, password));
 	}
 
 	// 0, the x2t error code or -1 for a format the engine can't write

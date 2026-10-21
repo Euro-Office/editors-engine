@@ -34,14 +34,21 @@ namespace eo
 		Document();
 		~Document();
 
-		// Converts the file to sdkjs' format in tempDir and lays it out
-		bool Open(const std::wstring& path, const std::wstring& tempDir);
+		// x2t's result for a file that needs a password (AVS_FILEUTILS_ERROR_CONVERT_PASSWORD)
+		static const int ERROR_PASSWORD = 91;
+
+		// Converts the file to sdkjs' format in tempDir and lays it out. An encrypted file
+		// needs its password, and is saved with it again. Returns 0, the x2t error code
+		// (ERROR_PASSWORD for a missing or wrong password) or -1.
+		int Open(const std::wstring& path, const std::wstring& tempDir, const std::wstring& password = L"");
 		void Close();
 
 		// Saves the document with its edits to path, converted by x2t to the format of
 		// extension ("docx", "odt", "rtf", "txt", "pptx", "odp", "xlsx", "ods", "csv", "pdf", ...). Returns 0, the x2t error
 		// code or -1 for a format the engine can't write (for example "doc").
 		int Save(const std::wstring& path, const std::wstring& extension);
+		// The same, with the given password instead of the file's ("" for none)
+		int SaveWithPassword(const std::wstring& path, const std::wstring& extension, const std::wstring& password);
 
 		// Runs JavaScript in the document's context (see engine.js for the editing
 		// commands) and returns its result if that is a string
@@ -58,6 +65,8 @@ namespace eo
 		                unsigned char* pixels, bool rgba);
 
 	private:
+		int Decrypt(const std::wstring& path, const std::wstring& tempDir, const std::wstring& password, std::wstring& target);
+
 		struct Private;
 		std::unique_ptr<Private> m_private;
 	};

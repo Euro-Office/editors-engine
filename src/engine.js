@@ -225,6 +225,33 @@ function createHitContext() {
 	return context;
 }
 
+// A comment (sdkjs' asc_CCommentData*) as JSON: text, author, time, solved, replies
+function commentJson(id, data, place) {
+	var replies = [];
+	for (var i = 0; i < data.asc_getRepliesCount(); i++) {
+		var reply = data.asc_getReply(i);
+		replies.push({ "text": reply.asc_getText() || "", "user": reply.asc_getUserName() || "", "time": String(reply.asc_getTime() || "") });
+	}
+	var result = {
+		"id": String(id), "text": data.asc_getText() || "", "user": data.asc_getUserName() || "",
+		"time": String(data.asc_getTime() || ""), "quote": data.asc_getQuoteText() || "",
+		"solved": !!data.asc_getSolved(), "replies": replies
+	};
+	for (var key in place)
+		result[key] = place[key];
+	return result;
+}
+
+// New comment data (sdkjs' asc_CCommentData*) from the current user
+function newCommentData(Type, user, text) {
+	var data = new Type();
+	data.asc_putText(text);
+	data.asc_putUserId(user["id"]);
+	data.asc_putUserName(user["name"]);
+	data.asc_putTime(String(Date.now()));
+	return data;
+}
+
 // Charts, the same in all editors. options: selectedDrawings() as in the editors, insert(type),
 // action(name, change) for one undo step that redraws, sheet: data comes from cells
 function chartCommands(engine, api, options) {
@@ -1353,6 +1380,73 @@ function chartCommands(engine, api, options) {
 		}
 	});
 
+	// Comments: [{id, text, user, time, quote, solved, replies, page, x, y}] (page -1: on the presentation)
+	var commentUser = { "id": "", "name": "" };
+	var CommentData = isPresentation ? Asc.asc_CCommentDataSlide : Asc.asc_CCommentDataWord;
+	engine["setCommentUser"] = function (id, name) { commentUser = { "id": id, "name": name }; };
+	function commentData(id) {
+		if (!isPresentation) {
+			var comment = logicDocument.Comments.Get_ById(id);
+			return comment ? new CommentData(comment.GetData()) : null;
+		}
+		var found = logicDocument.GetAllComments().filter(function (item) { return item.comment.Get_Id() === id; })[0];
+		return found ? new CommentData(found.comment.Data) : null;
+	}
+	engine["getComments"] = function () {
+		var result = [];
+		if (isPresentation) {
+			logicDocument.GetAllComments().forEach(function (item) {
+				result.push(commentJson(item.comment.Get_Id(), new CommentData(item.comment.Data),
+					{ "page": item.slide ? logicDocument.Slides.indexOf(item.slide) : -1, "x": item.comment.x || 0, "y": item.comment.y || 0 }));
+			});
+		} else {
+			var all = logicDocument.Comments.GetAllComments();
+			for (var id in all) {
+				var start = all[id].m_oStartInfo || {};
+				result.push(commentJson(id, new CommentData(all[id].GetData()),
+					{ "page": typeof start.PageNum === "number" ? start.PageNum : -1, "x": start.X || 0, "y": start.Y || 0 }));
+			}
+		}
+		return JSON.stringify(result);
+	};
+	// On the selection (or the word at the cursor; in presentations the slide)
+	engine["addComment"] = function (text) {
+		engine["finishComposingText"]();
+		var data = newCommentData(CommentData, commentUser, text);
+		data.asc_putDocumentFlag(false);
+		api.asc_addComment(data);
+		allPagesChanged();
+	};
+	function changeComment(id, change) {
+		var data = commentData(id);
+		if (!data)
+			return;
+		change(data);
+		api.asc_changeComment(id, data);
+		allPagesChanged();
+	}
+	engine["replyComment"] = function (id, text) {
+		changeComment(id, function (data) { data.asc_addReply(newCommentData(CommentData, commentUser, text)); });
+	};
+	engine["resolveComment"] = function (id, solved) {
+		changeComment(id, function (data) { data.asc_putSolved(solved); });
+	};
+	engine["deleteComment"] = function (id) {
+		api.asc_removeComment(id);
+		allPagesChanged();
+	};
+	// Moves to the comment: its text in documents, its slide in presentations
+	engine["gotoComment"] = function (id) {
+		if (isPresentation)
+			api.asc_showComment(id);
+		else
+			api.asc_selectComment(id);
+		allPagesChanged();
+	};
+	// Commented text is highlighted
+	if (!isPresentation)
+		api.asc_showComments(true);
+
 	chartCommands(engine, api, {
 		selectedDrawings: function () { return editor.selectedDrawings(); },
 		insert: function (type) {
@@ -1684,6 +1778,73 @@ function spreadsheetEngine(window, api) {
 	["insertChart", "setChartType", "setChartElements"].forEach(function (name) {
 		engine[name] = edit(engine[name]);
 	});
+
+	// Comments on cells: [{id, text, user, time, quote, solved, replies, sheet, col, row}]. Added
+	// and changed without sdkjs' lock (co-editing), which waits for a server here.
+	var commentUser = { "id": "", "name": "" };
+	engine["setCommentUser"] = function (id, name) { commentUser = { "id": id, "name": name }; };
+	function sheetComment(id) {
+		for (var i = 0; i < api.wb.model.getWorksheetCount(); i++) {
+			var found = api.wb.model.getWorksheet(i).aComments.filter(function (comment) { return comment.asc_getId() === id; })[0];
+			if (found)
+				return { sheet: i, comment: found };
+		}
+		return null;
+	}
+	engine["getComments"] = function () {
+		var result = [];
+		for (var i = 0; i < api.wb.model.getWorksheetCount(); i++) {
+			api.wb.model.getWorksheet(i).aComments.forEach(function (comment) {
+				var place = { "sheet": i, "col": comment.asc_getCol(), "row": comment.asc_getRow() };
+				var json = commentJson(comment.asc_getId(), comment, place);
+				json["quote"] = new Asc.Range(place["col"], place["row"], place["col"], place["row"]).getName();
+				result.push(json);
+			});
+		}
+		return JSON.stringify(result);
+	};
+	// On the active cell (one per cell)
+	engine["addComment"] = edit(function (text) {
+		var ws = view();
+		var data = newCommentData(Asc.asc_CCommentData, commentUser, text);
+		var cell = ws.model.selectionRange.activeCell;
+		data.asc_putCol(cell.col);
+		data.asc_putRow(cell.row);
+		ws.cellCommentator.addComment(data, true);
+	});
+	// The comment's sheet becomes the active one
+	function changeComment(id, change) {
+		var found = sheetComment(id);
+		if (!found)
+			return;
+		if (found.sheet !== api.wb.model.getActive())
+			api.asc_showWorksheet(found.sheet);
+		var data = found.comment.clone();
+		change(data);
+		view().cellCommentator.changeComment(id, data, false, false, true);
+	}
+	engine["replyComment"] = edit(function (id, text) {
+		changeComment(id, function (data) { data.asc_addReply(newCommentData(Asc.asc_CCommentData, commentUser, text)); });
+	});
+	engine["resolveComment"] = edit(function (id, solved) {
+		changeComment(id, function (data) { data.asc_putSolved(solved); });
+	});
+	engine["deleteComment"] = edit(function (id) {
+		var found = sheetComment(id);
+		if (!found)
+			return;
+		if (found.sheet !== api.wb.model.getActive())
+			api.asc_showWorksheet(found.sheet);
+		view().cellCommentator.removeComment(id, false, true);
+	});
+	engine["gotoComment"] = function (id) {
+		var found = sheetComment(id);
+		if (!found)
+			return;
+		if (found.sheet !== api.wb.model.getActive())
+			engine["setActiveSheet"](found.sheet);
+		engine["selectCells"](found.comment.asc_getCol(), found.comment.asc_getRow(), found.comment.asc_getCol(), found.comment.asc_getRow());
+	};
 
 	// Search in all sheets: find selects the next or previous matching cell
 	var search = null;

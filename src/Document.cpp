@@ -3,6 +3,7 @@
 #include "engine_js.h"
 
 #include "Common/OfficeFileFormats.h"
+#include "DesktopEditor/common/File.h"
 #include "DesktopEditor/doctrenderer/docbuilder.h"
 #include "DesktopEditor/doctrenderer/embed/GraphicsEmbed.h"
 #include "DesktopEditor/graphics/pro/Fonts.h"
@@ -10,6 +11,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <codecvt>
 #include <cwctype>
 #include <locale>
@@ -20,6 +22,7 @@
 #include <android/log.h>
 #else
 #include <iostream>
+#include <sys/wait.h>
 #endif
 
 #ifdef __ANDROID__
@@ -58,6 +61,7 @@ namespace eo
 
 		// Fonts shared by all tiles, so drawing a tile doesn't reload the font index
 		NSFonts::IApplicationFonts* g_fonts = nullptr;
+		std::wstring g_runtimeDir;
 
 #ifdef __ANDROID__
 		// docbuilder starts the x2t executable to convert; Android apps can't, so run x2t in-process
@@ -69,6 +73,19 @@ namespace eo
 			return X2T_Convert(2, argv);
 		}
 #endif
+
+		// Runs x2t with a task file, as docbuilder does
+		int RunX2t(const std::wstring& paramsPath)
+		{
+#ifdef __ANDROID__
+			return ConvertWithX2t(paramsPath.c_str());
+#else
+			std::string command = "\"" + std::wstring_convert<std::codecvt_utf8<wchar_t>>().to_bytes(g_runtimeDir + L"/x2t") +
+			                      "\" \"" + std::wstring_convert<std::codecvt_utf8<wchar_t>>().to_bytes(paramsPath) + "\"";
+			int status = std::system(command.c_str());
+			return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+#endif
+		}
 
 		// Lets doctrenderer draw straight into the engine's pixel buffer
 		class TileImage : public CGraphicsAppImage
@@ -107,6 +124,9 @@ namespace eo
 		std::unique_ptr<CDocBuilderContext> context;
 		std::unique_ptr<CDocBuilderContextScope> scope;
 
+		// The password of an encrypted file, to save it encrypted again
+		std::wstring password;
+
 		// Decoded images and metafiles, so tiles don't decode them again
 		NSImages::IImageFilesCache* imageCache = nullptr;
 
@@ -128,6 +148,7 @@ namespace eo
 	{
 		Timer timer;
 		CDocBuilder::Initialize(runtimeDir.c_str());
+		g_runtimeDir = runtimeDir;
 #ifdef __ANDROID__
 		CDocBuilder::SetX2tConverter(&ConvertWithX2t);
 #endif
@@ -161,7 +182,69 @@ namespace eo
 		Close();
 	}
 
-	bool Document::Open(const std::wstring& path, const std::wstring& tempDir)
+	namespace
+	{
+		std::wstring XmlEscape(const std::wstring& text)
+		{
+			std::wstring result;
+			for (wchar_t c : text)
+			{
+				switch (c)
+				{
+				case L'&': result += L"&amp;"; break;
+				case L'<': result += L"&lt;"; break;
+				case L'>': result += L"&gt;"; break;
+				case L'"': result += L"&quot;"; break;
+				// docbuilder turns ' in save parameters into quotes
+				case L'\'': result += L"&apos;"; break;
+				default: result += c;
+				}
+			}
+			return result;
+		}
+	}
+
+	// To an unencrypted file of the same format in tempDir (target)
+	int Document::Decrypt(const std::wstring& path, const std::wstring& tempDir, const std::wstring& password, std::wstring& target)
+	{
+		std::wstring extension = path.substr(path.find_last_of(L'.') + 1);
+		std::transform(extension.begin(), extension.end(), extension.begin(), ::towlower);
+		// Old binary formats are decrypted to their modern ones
+		static const std::map<std::wstring, std::pair<std::wstring, int>> formats = {
+			{ L"doc", { L"docx", AVS_OFFICESTUDIO_FILE_DOCUMENT_DOCX } },
+			{ L"docx", { L"docx", AVS_OFFICESTUDIO_FILE_DOCUMENT_DOCX } },
+			{ L"docm", { L"docm", AVS_OFFICESTUDIO_FILE_DOCUMENT_DOCM } },
+			{ L"dotx", { L"dotx", AVS_OFFICESTUDIO_FILE_DOCUMENT_DOTX } },
+			{ L"xls", { L"xlsx", AVS_OFFICESTUDIO_FILE_SPREADSHEET_XLSX } },
+			{ L"xlsx", { L"xlsx", AVS_OFFICESTUDIO_FILE_SPREADSHEET_XLSX } },
+			{ L"xlsm", { L"xlsm", AVS_OFFICESTUDIO_FILE_SPREADSHEET_XLSM } },
+			{ L"xltx", { L"xltx", AVS_OFFICESTUDIO_FILE_SPREADSHEET_XLTX } },
+			{ L"ppt", { L"pptx", AVS_OFFICESTUDIO_FILE_PRESENTATION_PPTX } },
+			{ L"pptx", { L"pptx", AVS_OFFICESTUDIO_FILE_PRESENTATION_PPTX } },
+			{ L"pptm", { L"pptm", AVS_OFFICESTUDIO_FILE_PRESENTATION_PPTM } },
+			{ L"ppsx", { L"ppsx", AVS_OFFICESTUDIO_FILE_PRESENTATION_PPSX } },
+			{ L"odt", { L"odt", AVS_OFFICESTUDIO_FILE_DOCUMENT_ODT } },
+			{ L"ods", { L"ods", AVS_OFFICESTUDIO_FILE_SPREADSHEET_ODS } },
+			{ L"odp", { L"odp", AVS_OFFICESTUDIO_FILE_PRESENTATION_ODP } }
+		};
+		auto format = formats.find(extension);
+		if (format == formats.end())
+			return -1;
+		target = tempDir + L"/decrypted." + format->second.first;
+		std::wstring task = L"<?xml version=\"1.0\" encoding=\"utf-8\"?><TaskQueueDataConvert><m_sFileFrom>" + XmlEscape(path) +
+			L"</m_sFileFrom><m_sFileTo>" + XmlEscape(target) + L"</m_sFileTo><m_nFormatTo>" + std::to_wstring(format->second.second) +
+			L"</m_nFormatTo><m_sPassword>" + XmlEscape(password) + L"</m_sPassword><m_sFontDir>" + XmlEscape(g_runtimeDir + L"/fonts") +
+			L"</m_sFontDir><m_sAllFontsPath>" + XmlEscape(g_runtimeDir + L"/fonts/AllFonts.js") +
+			L"</m_sAllFontsPath><m_bIsNoBase64>true</m_bIsNoBase64><m_sTempDir>" + XmlEscape(tempDir) +
+			L"</m_sTempDir></TaskQueueDataConvert>";
+		std::wstring taskPath = tempDir + L"/decrypt.xml";
+		NSFile::CFileBinary::SaveToFile(taskPath, task, true);
+		int result = RunX2t(taskPath);
+		NSFile::CFileBinary::Remove(taskPath);
+		return result;
+	}
+
+	int Document::Open(const std::wstring& path, const std::wstring& tempDir, const std::wstring& password)
 	{
 		Close();
 
@@ -169,11 +252,27 @@ namespace eo
 		m_private->builder.reset(new CDocBuilder());
 		m_private->builder->SetTmpFolder(tempDir.c_str());
 		Timer timer;
-		if (m_private->builder->OpenFile(path.c_str(), L"") != 0)
+		// An encrypted file is decrypted first: docbuilder takes the kind of document from the
+		// file it opens, which for an encrypted one is an encrypted container
+		std::wstring openPath = path;
+		if (!password.empty())
+		{
+			int decrypted = Decrypt(path, tempDir, password, openPath);
+			if (decrypted != 0)
+			{
+				Close();
+				return decrypted;
+			}
+		}
+		int converted = m_private->builder->OpenFile(openPath.c_str(), L"");
+		if (openPath != path)
+			NSFile::CFileBinary::Remove(openPath);
+		if (converted != 0)
 		{
 			Close();
-			return false;
+			return converted;
 		}
+		m_private->password = password;
 		timer.Log("convert (x2t)");
 
 		// The first command creates the V8 context and loads sdkjs with the document.
@@ -181,7 +280,7 @@ namespace eo
 		if (!m_private->Run(L"void 'load sdkjs';"))
 		{
 			Close();
-			return false;
+			return -1;
 		}
 		timer.Log("load sdkjs and the document");
 		m_private->context.reset(new CDocBuilderContext(m_private->builder->GetContext()));
@@ -191,10 +290,10 @@ namespace eo
 		if (!m_private->Run(engineJs))
 		{
 			Close();
-			return false;
+			return -1;
 		}
 		timer.Log("layout (engine.js)");
-		return true;
+		return 0;
 	}
 
 	void Document::Close()
@@ -208,6 +307,13 @@ namespace eo
 	}
 
 	int Document::Save(const std::wstring& path, const std::wstring& extension)
+	{
+		// PDF and other exports aren't encrypted with the document's password
+		bool keepsPassword = extension != L"pdf" && extension != L"txt" && extension != L"csv" && extension != L"html";
+		return SaveWithPassword(path, extension, keepsPassword ? m_private->password : L"");
+	}
+
+	int Document::SaveWithPassword(const std::wstring& path, const std::wstring& extension, const std::wstring& password)
 	{
 		// docbuilder's own extension list is short and falls back to docx
 		static const std::map<std::wstring, int> formats = {
@@ -245,7 +351,8 @@ namespace eo
 		if (!m_private->builder || format == formats.end())
 			return -1;
 		m_private->Run(L"eoEngine.beforeSave();");
-		int error = m_private->builder->SaveFile(format->second, path.c_str());
+		std::wstring params = password.empty() ? L"" : L"<m_sSavePassword>" + XmlEscape(password) + L"</m_sSavePassword>";
+		int error = m_private->builder->SaveFile(format->second, path.c_str(), params.empty() ? nullptr : params.c_str());
 		m_private->Run(std::wstring(L"eoEngine.afterSave(") + (error == 0 ? L"true" : L"false") + L");");
 		return error;
 	}
