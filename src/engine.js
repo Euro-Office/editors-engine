@@ -1,16 +1,45 @@
 // sdkjs side of the engine, run once after a document is opened (see Document::Open).
-// Leaves docbuilder's builder mode, lays out the document and draws tiles into graphics
-// objects whose memory the native engine provides.
+// Leaves docbuilder's builder mode, lays out the document (the first pages now, the others
+// in slices, see tick) and draws tiles into graphics objects whose memory the native engine
+// provides.
 (function (window) {
 	var api = window["Asc"]["editor"];
 	var logicDocument = api.WordControl.m_oLogicDocument;
 	var drawingDocument = api.WordControl.m_oDrawingDocument;
 	var native = window["native"];
 
+	// Timers. sdkjs continues long work on timers, like the web editor's layout of the pages
+	// after the first ones; native.js ignores them. Here they wait in a queue the app runs in
+	// slices (tick), between its commands.
+	var timers = [];
+	var nextTimerId = 1;
+
+	window["setTimeout"] = function (callback) {
+		if (typeof callback !== "function")
+			return 0;
+		var timer = { id: nextTimerId++, callback: callback, args: Array.prototype.slice.call(arguments, 2) };
+		timers.push(timer);
+		return timer.id;
+	};
+
+	window["clearTimeout"] = function (id) {
+		for (var i = 0; i < timers.length; ++i) {
+			if (timers[i].id === id) {
+				timers.splice(i, 1);
+				return;
+			}
+		}
+	};
+
+	// Lay out with timers, as the web editor does, instead of the whole document at once
+	window["NATIVE_EDITOR_ENJINE_SYNC_RECALC"] = false;
+
 	// Builder mode opens documents without layout, interface events or undo history
 	api.asc_SetSilentMode(false);
 	AscCommon.History.TurnOnChanges();
-	api.asc_nativeCalculateFile();
+	logicDocument.MoveCursorToStartPos();
+	logicDocument.RecalculateFromStart();
+	api.ShowParaMarks = false;
 
 	// Directories for fonts and the document's images; passing a plain object (not the
 	// native control) keeps the app image the engine attached to the graphics object
@@ -82,7 +111,9 @@
 		"selection": [],      // [{page, points: [x1, y1, ... x4, y4]}]
 		"dirtyPages": {},     // pages to draw again
 		"layoutChanged": false,
+		"layoutPending": false, // pages still to lay out: call tick()
 		"modified": false,     // changed since opening or the last save
+		"error": null,         // exception of the last command (see reportError), reported once
 		"interface": {}       // asc_on* values: bold, italic, canUndo, ...
 	};
 	var cursorVisible = false;
@@ -180,10 +211,35 @@
 	engine["getState"] = function () {
 		updateSelection();
 		state["modified"] = api.isDocumentModified();
+		state["layoutPending"] = isLayoutPending();
 		var result = JSON.stringify(state);
 		state["dirtyPages"] = {};
 		state["layoutChanged"] = false;
+		state["error"] = null;
 		return result;
+	};
+
+	// Commands run in try/catch (EditorDocument): an exception in sdkjs is reported with the
+	// state instead of losing it
+	engine["reportError"] = function (e) {
+		state["error"] = String(e) + (e && e.stack ? "\n" + e.stack : "");
+	};
+
+	function isLayoutPending() {
+		return timers.length > 0 && (logicDocument.FullRecalc.Id !== null || !!logicDocument.HdrFtrRecalc.Id);
+	}
+
+	// Runs the timers queued so far (not those they queue) for up to budget milliseconds
+	engine["tick"] = function (budget) {
+		var end = Date.now() + budget;
+		for (var count = timers.length; count > 0 && timers.length > 0 && Date.now() < end; --count) {
+			var timer = timers.shift();
+			try {
+				timer.callback.apply(window, timer.args);
+			} catch (e) {
+				console.log("timer: " + e + "\n" + e.stack);
+			}
+		}
 	};
 
 	// Mouse/touch input at page coordinates (mm). type: 0 down, 1 move, 2 up

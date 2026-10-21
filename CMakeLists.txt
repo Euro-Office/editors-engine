@@ -52,7 +52,7 @@ set_target_properties(eoengine PROPERTIES BUILD_RPATH "\$ORIGIN" INSTALL_RPATH "
 if(ANDROID)
     # JNI binding for libeditors (lib.editors.base.engine.NativeEngine)
     target_sources(eoengine PRIVATE src/jni/DocumentJni.cpp)
-    target_link_libraries(eoengine PRIVATE jnigraphics)
+    target_link_libraries(eoengine PRIVATE jnigraphics log)
 endif()
 
 if(EO_ENGINE_TOOLS)

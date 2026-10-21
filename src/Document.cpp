@@ -9,11 +9,18 @@
 #include "DesktopEditor/graphics/pro/Image.h"
 
 #include <algorithm>
+#include <chrono>
 #include <codecvt>
 #include <cwctype>
 #include <locale>
 #include <map>
 #include <string>
+
+#ifdef __ANDROID__
+#include <android/log.h>
+#else
+#include <iostream>
+#endif
 
 #ifdef __ANDROID__
 // x2t built as a library (core's x2tlib, libx2t.so)
@@ -29,6 +36,26 @@ namespace eo
 {
 	namespace
 	{
+		// Durations of the steps of opening and saving: logcat (EditorEngine) or stderr
+		class Timer
+		{
+		public:
+			void Log(const char* step)
+			{
+				auto now = std::chrono::steady_clock::now();
+				long long ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - m_start).count();
+				m_start = now;
+#ifdef __ANDROID__
+				__android_log_print(ANDROID_LOG_INFO, "EditorEngine", "%s: %lld ms", step, ms);
+#else
+				std::cerr << step << ": " << ms << " ms" << std::endl;
+#endif
+			}
+
+		private:
+			std::chrono::steady_clock::time_point m_start = std::chrono::steady_clock::now();
+		};
+
 		// Fonts shared by all tiles, so drawing a tile doesn't reload the font index
 		NSFonts::IApplicationFonts* g_fonts = nullptr;
 
@@ -99,15 +126,18 @@ namespace eo
 
 	bool Document::Initialize(const std::wstring& runtimeDir)
 	{
+		Timer timer;
 		CDocBuilder::Initialize(runtimeDir.c_str());
 #ifdef __ANDROID__
 		CDocBuilder::SetX2tConverter(&ConvertWithX2t);
 #endif
+		timer.Log("start V8");
 		if (!g_fonts)
 		{
 			g_fonts = NSFonts::NSApplication::Create();
 			g_fonts->InitializeFromFolder(runtimeDir + L"/fonts");
 		}
+		timer.Log("load the font index");
 		return true;
 	}
 
@@ -133,11 +163,13 @@ namespace eo
 		m_private->imageCache = NSImages::NSFilesCache::Create(g_fonts);
 		m_private->builder.reset(new CDocBuilder());
 		m_private->builder->SetTmpFolder(tempDir.c_str());
+		Timer timer;
 		if (m_private->builder->OpenFile(path.c_str(), L"") != 0)
 		{
 			Close();
 			return false;
 		}
+		timer.Log("convert (x2t)");
 
 		// The first command creates the V8 context and loads sdkjs with the document.
 		// It then stays entered, so results of later commands can be read.
@@ -146,6 +178,7 @@ namespace eo
 			Close();
 			return false;
 		}
+		timer.Log("load sdkjs and the document");
 		m_private->context.reset(new CDocBuilderContext(m_private->builder->GetContext()));
 		m_private->scope.reset(new CDocBuilderContextScope(m_private->context->CreateScope()));
 
@@ -155,6 +188,7 @@ namespace eo
 			Close();
 			return false;
 		}
+		timer.Log("layout (engine.js)");
 		return true;
 	}
 
