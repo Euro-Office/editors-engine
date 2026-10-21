@@ -31,7 +31,7 @@ namespace eo
 		void Close();
 
 		// Saves the document with its edits to path, converted by x2t to the format of
-		// extension ("docx", "odt", "rtf", "txt", "pdf", ...). Returns 0, the x2t error
+		// extension ("docx", "odt", "rtf", "txt", "pptx", "odp", "pdf", ...). Returns 0, the x2t error
 		// code or -1 for a format the engine can't write (for example "doc").
 		int Save(const std::wstring& path, const std::wstring& extension);
 

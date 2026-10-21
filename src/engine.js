@@ -1,12 +1,14 @@
 // sdkjs side of the engine, run once after a document is opened (see Document::Open).
-// Leaves docbuilder's builder mode, lays out the document (the first pages now, the others
-// in slices, see tick) and draws tiles into graphics objects whose memory the native engine
-// provides.
+// Leaves docbuilder's builder mode, lays out the document (text documents: the first pages
+// now, the others in slices, see tick) and draws tiles into graphics objects whose memory
+// the native engine provides. Works for text documents and presentations: "pages" are the
+// slides of a presentation (see the editor adapters below).
 (function (window) {
 	var api = window["Asc"]["editor"];
 	var logicDocument = api.WordControl.m_oLogicDocument;
 	var drawingDocument = api.WordControl.m_oDrawingDocument;
 	var native = window["native"];
+	var isPresentation = api.editorId === AscCommon.c_oEditorId.Presentation;
 
 	// Timers. sdkjs continues long work on timers, like the web editor's layout of the pages
 	// after the first ones; native.js ignores them. Here they wait in a queue the app runs in
@@ -34,11 +36,89 @@
 	// Lay out with timers, as the web editor does, instead of the whole document at once
 	window["NATIVE_EDITOR_ENJINE_SYNC_RECALC"] = false;
 
+	// docpostype_DrawingObjects of word/Editor/Document.js (not exported)
+	var DOC_POS_DRAWING_OBJECTS = 0x03;
+
+	// What differs between the editors: pages, layout and where selections come from.
+	// Selections are collected from the document in getState(), because the web editor draws
+	// them on an overlay canvas the engine doesn't have.
+	var documentEditor = {
+		layout: function () {
+			logicDocument.MoveCursorToStartPos();
+			logicDocument.RecalculateFromStart();
+		},
+		pageCount: function () { return drawingDocument.m_lPagesCount; },
+		pageWidth: function (page) { return drawingDocument.m_arrPages[page].width_mm; },
+		pageHeight: function (page) { return drawingDocument.m_arrPages[page].height_mm; },
+		isLayoutPending: function () {
+			return logicDocument.FullRecalc.Id !== null || !!logicDocument.HdrFtrRecalc.Id;
+		},
+		drawTextSelection: function () {
+			if (!logicDocument.IsSelectionUse() || logicDocument.IsSelectionEmpty())
+				return;
+			for (var page = 0; page < drawingDocument.m_lPagesCount; ++page)
+				logicDocument.DrawSelectionOnPage(page);
+		},
+		// Selected pictures and shapes, with the page each one is on
+		selectedDrawings: function () {
+			// Not while editing the text of a shape
+			var controller = logicDocument.DrawingObjects;
+			if (!controller || logicDocument.GetDocPosType() !== DOC_POS_DRAWING_OBJECTS || controller.getTargetDocContent())
+				return [];
+			return controller.getSelectedArray().map(function (drawing) {
+				return { drawing: drawing, page: drawing.selectStartPage !== undefined && drawing.selectStartPage !== -1
+					? drawing.selectStartPage : drawing.parent.PageNum };
+			});
+		}
+	};
+
+	var presentationEditor = {
+		layout: function () {
+			api.asc_nativeCalculateFile();
+		},
+		pageCount: function () { return logicDocument.GetSlidesCount(); },
+		pageWidth: function () { return logicDocument.GetWidthMM(); },
+		pageHeight: function () { return logicDocument.GetHeightMM(); },
+		isLayoutPending: function () { return false; },
+		// Text in a shape on the current slide; sdkjs draws it as page 0 of the shape's text
+		drawTextSelection: function () {
+			var controller = logicDocument.GetCurrentController();
+			var content = controller && controller.getTargetDocContent();
+			if (!content || !content.IsSelectionUse() || content.IsSelectionEmpty())
+				return;
+			selectionPage = logicDocument.CurPage;
+			controller.drawTextSelection(logicDocument.CurPage);
+			selectionPage = null;
+		},
+		selectedDrawings: function () {
+			var controller = logicDocument.GetCurrentController();
+			if (!controller || controller.getTargetDocContent())
+				return [];
+			return controller.getSelectedArray().map(function (drawing) {
+				return { drawing: drawing, page: logicDocument.CurPage };
+			});
+		}
+	};
+
+	var editor = isPresentation ? presentationEditor : documentEditor;
+
+	// sdkjs switches slides (after adding one, ...) through the web editor's view, which
+	// returns early without one
+	if (isPresentation) {
+		api.WordControl.GoToPage = function (slide) {
+			if (slide < 0 || slide >= logicDocument.GetSlidesCount())
+				return;
+			drawingDocument.SlideCurrent = slide;
+			logicDocument.Set_CurPage(slide);
+		};
+	}
+	// Page for selections sdkjs draws relative to a shape (presentations)
+	var selectionPage = null;
+
 	// Builder mode opens documents without layout, interface events or undo history
 	api.asc_SetSilentMode(false);
 	AscCommon.History.TurnOnChanges();
-	logicDocument.MoveCursorToStartPos();
-	logicDocument.RecalculateFromStart();
+	editor.layout();
 	api.ShowParaMarks = false;
 
 	// Directories for fonts and the document's images; passing a plain object (not the
@@ -55,15 +135,15 @@
 	engine["tile"] = null;
 
 	engine["getPageCount"] = function () {
-		return drawingDocument.m_lPagesCount;
+		return editor.pageCount();
 	};
 
 	engine["getPageWidth"] = function (page) {
-		return drawingDocument.m_arrPages[page].width_mm;
+		return editor.pageWidth(page);
 	};
 
 	engine["getPageHeight"] = function (page) {
-		return drawingDocument.m_arrPages[page].height_mm;
+		return editor.pageHeight(page);
 	};
 
 	engine["beginTile"] = function () {
@@ -72,9 +152,10 @@
 
 	// Draws the area (x, y, width, height) of a page rendered at pageWidth x pageHeight pixels
 	engine["drawTile"] = function (page, pageWidth, pageHeight, x, y, width, height) {
-		var pageInfo = drawingDocument.m_arrPages[page];
-		var mmPerPixelX = pageInfo.width_mm / pageWidth;
-		var mmPerPixelY = pageInfo.height_mm / pageHeight;
+		var widthMm = editor.pageWidth(page);
+		var heightMm = editor.pageHeight(page);
+		var mmPerPixelX = widthMm / pageWidth;
+		var mmPerPixelY = heightMm / pageHeight;
 
 		var g = engine["tile"];
 		g.width = width;
@@ -87,9 +168,9 @@
 		g.b_color1(255, 255, 255, 255);
 		g._s();
 		g._m(0, 0);
-		g._l(pageInfo.width_mm, 0);
-		g._l(pageInfo.width_mm, pageInfo.height_mm);
-		g._l(0, pageInfo.height_mm);
+		g._l(widthMm, 0);
+		g._l(widthMm, heightMm);
+		g._l(0, heightMm);
 		g._z();
 		g.df();
 
@@ -109,9 +190,11 @@
 	var state = {
 		"cursor": null,       // {page, x1, y1, x2, y2} of the cursor line, or null when hidden
 		"selection": [],      // [{page, points: [x1, y1, ... x4, y4]}]
+		"drawings": [],       // selected pictures and shapes: [{page, points: [x1, y1, ... x4, y4]}]
 		"dirtyPages": {},     // pages to draw again
 		"layoutChanged": false,
 		"layoutPending": false, // pages still to lay out: call tick()
+		"currentPage": -1,     // presentations: the current slide
 		"modified": false,     // changed since opening or the last save
 		"error": null,         // exception of the last command (see reportError), reported once
 		"interface": {}       // asc_on* values: bold, italic, canUndo, ...
@@ -160,36 +243,52 @@
 		cursorVisible = false;
 		updateCursor();
 	});
-	// The web editor draws the selection on its overlay canvas (OnUpdateOverlay), which the
-	// engine doesn't have: the selection is collected from the document in getState() instead
+	// Collects the selection drawn by sdkjs (see updateSelection) instead of drawing it
 	drawingDocument["AddPageSelection"] = function (page, x, y, w, h) {
 		var points = [];
 		[[x, y], [x + w, y], [x + w, y + h], [x, y + h]].forEach(function (corner) {
 			points = points.concat(transformPoint(corner[0], corner[1]));
 		});
-		state["selection"].push({ "page": page, "points": points });
+		state["selection"].push({ "page": selectionPage !== null ? selectionPage : page, "points": points });
 	};
 
 	function updateSelection() {
 		state["selection"] = [];
-		if (!logicDocument.IsSelectionUse() || logicDocument.IsSelectionEmpty())
-			return;
 		// Text in shapes sets its transform while drawing; the cursor keeps its own
 		var textMatrix = drawingDocument.TextMatrix;
-		for (var page = 0; page < drawingDocument.m_lPagesCount; ++page)
-			logicDocument.DrawSelectionOnPage(page);
+		editor.drawTextSelection();
 		drawingDocument.TextMatrix = textMatrix;
+
+		state["drawings"] = editor.selectedDrawings().map(function (selected) {
+			var drawing = selected.drawing;
+			var matrix = drawing.transform;
+			var points = [];
+			[[0, 0], [drawing.extX, 0], [drawing.extX, drawing.extY], [0, drawing.extY]].forEach(function (corner) {
+				points.push(matrix.TransformPointX(corner[0], corner[1]), matrix.TransformPointY(corner[0], corner[1]));
+			});
+			return { "page": selected.page, "points": points };
+		});
 	}
 
-	wrap("OnRecalculatePage", function (page) {
+	function pageChanged(page) {
 		state["dirtyPages"][page] = true;
 		state["layoutChanged"] = true;
-	});
+	}
+
+	if (isPresentation) {
+		// Replaced: the web editor also redraws its cached slide picture and thumbnails here
+		drawingDocument["OnRecalculateSlide"] = function (index) {
+			api.sendEvent("asc_onDocumentChanged");
+			pageChanged(index);
+		};
+	} else {
+		wrap("OnRecalculatePage", pageChanged);
+		wrap("OnRepaintPage", function (page) {
+			state["dirtyPages"][page] = true;
+		});
+	}
 	wrap("OnEndRecalculate", function () {
 		state["layoutChanged"] = true;
-	});
-	wrap("OnRepaintPage", function (page) {
-		state["dirtyPages"][page] = true;
 	});
 
 	["asc_onBold", "asc_onItalic", "asc_onUnderline", "asc_onStrikeout", "asc_onCanUndo", "asc_onCanRedo",
@@ -212,6 +311,7 @@
 		updateSelection();
 		state["modified"] = api.isDocumentModified();
 		state["layoutPending"] = isLayoutPending();
+		state["currentPage"] = isPresentation ? logicDocument.CurPage : -1;
 		var result = JSON.stringify(state);
 		state["dirtyPages"] = {};
 		state["layoutChanged"] = false;
@@ -226,7 +326,7 @@
 	};
 
 	function isLayoutPending() {
-		return timers.length > 0 && (logicDocument.FullRecalc.Id !== null || !!logicDocument.HdrFtrRecalc.Id);
+		return timers.length > 0 && editor.isLayoutPending();
 	}
 
 	// Runs the timers queued so far (not those they queue) for up to budget milliseconds
@@ -376,12 +476,14 @@
 
 	engine["beforeSave"] = function () {
 		engine["finishComposingText"]();
-		savedState = logicDocument.SaveDocumentState();
+		if (!isPresentation)
+			savedState = logicDocument.SaveDocumentState();
 	};
 
 	engine["afterSave"] = function (success) {
 		logicDocument.TurnOn_InterfaceEvents(false);
-		logicDocument.TurnOn_RecalculateCurPos(false);
+		if (!isPresentation)
+			logicDocument.TurnOn_RecalculateCurPos(false);
 		if (savedState) {
 			logicDocument.LoadDocumentState(savedState);
 			logicDocument.UpdateSelection();
@@ -398,5 +500,9 @@
 	engine["setUnderline"] = function (value) { api.put_TextPrUnderline(value); };
 	engine["setAlign"] = function (value) { api.put_PrAlign(value); };
 	engine["undo"] = function () { api.Undo(); };
+	// Presentations: a slide after the current one, with the layout of the current one
+	engine["addSlide"] = function () { api.AddSlide(); };
+	engine["deleteSlide"] = function () { api.DeleteSlide(); };
+	engine["getCurrentSlide"] = function () { return isPresentation ? logicDocument.CurPage : -1; };
 	engine["redo"] = function () { api.Redo(); };
 })(window);
