@@ -29,7 +29,7 @@ set(CORE_LIBS_PATH "${CORE_LIBS_DIR}")
 if(ANDROID)
     set(CORE_LIBS_PATH "${CORE_LIBS_DIR}/${ANDROID_ABI}")
 endif()
-set(CORE_LIBRARIES doctrenderer graphics kernel UnicodeConverter)
+set(CORE_LIBRARIES doctrenderer graphics kernel UnicodeConverter PdfFile XpsFile DjVuFile)
 if(ANDROID)
     # X2T_Convert, for converting in-process (see Document.cpp)
     list(APPEND CORE_LIBRARIES x2t)
@@ -39,7 +39,7 @@ foreach(lib ${CORE_LIBRARIES})
     list(APPEND CORE_LIBRARY_FILES "${CORE_LIBS_PATH}/lib${lib}.so")
 endforeach()
 
-add_library(eoengine SHARED src/Document.cpp)
+add_library(eoengine SHARED src/Document.cpp src/DrawingDocument.cpp)
 target_include_directories(eoengine
     PUBLIC src
     PRIVATE "${CORE_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}"

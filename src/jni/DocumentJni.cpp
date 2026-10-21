@@ -1,6 +1,7 @@
 // JNI binding of the engine for libeditors (lib.editors.base.engine)
 
 #include "../Document.h"
+#include "../DrawingDocument.h"
 
 #include <android/bitmap.h>
 #include <jni.h>
@@ -22,6 +23,22 @@ namespace
 	eo::Document* FromHandle(jlong handle)
 	{
 		return reinterpret_cast<eo::Document*>(handle);
+	}
+
+	eo::DrawingDocument* DrawingFromHandle(jlong handle)
+	{
+		return reinterpret_cast<eo::DrawingDocument*>(handle);
+	}
+
+	// Locks an RGBA_8888 bitmap without row padding; null if it isn't one
+	void* LockBitmap(JNIEnv* env, jobject bitmap, AndroidBitmapInfo& info)
+	{
+		void* pixels = nullptr;
+		if (AndroidBitmap_getInfo(env, bitmap, &info) != ANDROID_BITMAP_RESULT_SUCCESS ||
+		    info.format != ANDROID_BITMAP_FORMAT_RGBA_8888 || info.stride != 4 * info.width ||
+		    AndroidBitmap_lockPixels(env, bitmap, &pixels) != ANDROID_BITMAP_RESULT_SUCCESS)
+			return nullptr;
+		return pixels;
 	}
 }
 
@@ -93,17 +110,67 @@ extern "C"
 	                                                          jobject bitmap)
 	{
 		AndroidBitmapInfo info;
-		if (AndroidBitmap_getInfo(env, bitmap, &info) != ANDROID_BITMAP_RESULT_SUCCESS ||
-		    info.format != ANDROID_BITMAP_FORMAT_RGBA_8888 || info.stride != 4 * info.width)
-			return JNI_FALSE;
-
-		void* pixels = nullptr;
-		if (AndroidBitmap_lockPixels(env, bitmap, &pixels) != ANDROID_BITMAP_RESULT_SUCCESS)
+		void* pixels = LockBitmap(env, bitmap, info);
+		if (!pixels)
 			return JNI_FALSE;
 
 		bool rendered = FromHandle(handle)->RenderTile(page, pageWidth, pageHeight, x, y,
 		                                               (int)info.width, (int)info.height,
 		                                               static_cast<unsigned char*>(pixels), true);
+		AndroidBitmap_unlockPixels(env, bitmap);
+		return rendered ? JNI_TRUE : JNI_FALSE;
+	}
+
+	// PDF, XPS and DjVu (lib.editors.base.engine.NativeEngine, NativeDrawingDocument)
+
+	JNIEXPORT jlong JNICALL
+	Java_lib_editors_base_engine_NativeEngine_nativeCreateDrawingDocument(JNIEnv*, jobject)
+	{
+		return reinterpret_cast<jlong>(new eo::DrawingDocument());
+	}
+
+	JNIEXPORT void JNICALL
+	Java_lib_editors_base_engine_NativeEngine_nativeDestroyDrawingDocument(JNIEnv*, jobject, jlong handle)
+	{
+		delete DrawingFromHandle(handle);
+	}
+
+	// eo::DrawingDocument::OpenResult
+	JNIEXPORT jint JNICALL
+	Java_lib_editors_base_engine_NativeEngine_nativeOpenDrawing(JNIEnv* env, jobject, jlong handle, jstring path,
+	                                                           jstring password, jstring tempDir)
+	{
+		return DrawingFromHandle(handle)->Open(ToWide(env, path), ToWide(env, password), ToWide(env, tempDir));
+	}
+
+	JNIEXPORT jint JNICALL
+	Java_lib_editors_base_engine_NativeEngine_nativeGetDrawingPageCount(JNIEnv*, jobject, jlong handle)
+	{
+		return DrawingFromHandle(handle)->GetPageCount();
+	}
+
+	JNIEXPORT jdoubleArray JNICALL
+	Java_lib_editors_base_engine_NativeEngine_nativeGetDrawingPageSize(JNIEnv* env, jobject, jlong handle, jint page)
+	{
+		eo::PageSize size = DrawingFromHandle(handle)->GetPageSize(page);
+		jdouble values[] = { size.widthMm, size.heightMm };
+		jdoubleArray result = env->NewDoubleArray(2);
+		env->SetDoubleArrayRegion(result, 0, 2, values);
+		return result;
+	}
+
+	JNIEXPORT jboolean JNICALL
+	Java_lib_editors_base_engine_NativeEngine_nativeRenderDrawingTile(JNIEnv* env, jobject, jlong handle, jint page,
+	                                                                 jint pageWidth, jint pageHeight, jint x, jint y,
+	                                                                 jobject bitmap)
+	{
+		AndroidBitmapInfo info;
+		void* pixels = LockBitmap(env, bitmap, info);
+		if (!pixels)
+			return JNI_FALSE;
+		bool rendered = DrawingFromHandle(handle)->RenderTile(page, pageWidth, pageHeight, x, y,
+		                                                      (int)info.width, (int)info.height,
+		                                                      static_cast<unsigned char*>(pixels), true);
 		AndroidBitmap_unlockPixels(env, bitmap);
 		return rendered ? JNI_TRUE : JNI_FALSE;
 	}

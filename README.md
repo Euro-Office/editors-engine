@@ -12,6 +12,7 @@ Kotlin UI (libg*) ── libeditors (EditorEngine, EditorDocument) ── JNI (s
 |---|---|
 | `src/Document.h/.cpp` | `eo::Document`: open a document (x2t converts it, sdkjs lays it out), page count and sizes, draw a tile into a pixel buffer, save |
 | `src/engine.js` | Runs in sdkjs after opening (embedded as `engine_js.h`): leaves docbuilder's builder mode, lays out the document, draws tiles |
+| `src/DrawingDocument.h/.cpp` | `eo::DrawingDocument`: PDF, XPS and DjVu through core's readers (PdfFile, XpsFile, DjVuFile), no sdkjs: pages, tiles, PDF passwords |
 | `src/jni/DocumentJni.cpp` | JNI for `lib.editors.base.engine.NativeEngine` (Android only); draws into `Bitmap`s |
 | `tools/render.cpp` | Desktop check: renders page 1 whole and from tiles, compares both and saves PNGs |
 

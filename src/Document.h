@@ -3,6 +3,11 @@
 #include <memory>
 #include <string>
 
+namespace NSFonts
+{
+	class IApplicationFonts;
+}
+
 namespace eo
 {
 	struct PageSize
@@ -22,6 +27,9 @@ namespace eo
 		// and the font index (fonts/AllFonts.js, fonts/font_selection.bin).
 		static bool Initialize(const std::wstring& runtimeDir);
 		static void Dispose();
+
+		// Fonts of the engine (for DrawingDocument); null before Initialize
+		static NSFonts::IApplicationFonts* GetFonts();
 
 		Document();
 		~Document();

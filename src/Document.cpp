@@ -141,6 +141,11 @@ namespace eo
 		return true;
 	}
 
+	NSFonts::IApplicationFonts* Document::GetFonts()
+	{
+		return g_fonts;
+	}
+
 	void Document::Dispose()
 	{
 		RELEASEINTERFACE(g_fonts);
