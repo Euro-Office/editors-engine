@@ -73,3 +73,21 @@ Opening, after the first start (which unpacks the runtime and indexes the fonts,
 - **Editing.** The web cell editor (`CellEditor`) and the events controller depend on the DOM, so cells are edited in a native field and committed with `WorksheetView._saveCellValueAfterEdit(range, [Fragment])`, the cell editor's own commit (formulas, recalculation and undo work). `selectCells(..., enterText)` enters and moves in one command, so the state reports both.
 - **Commands.** `selectCells`, `setCellText`, `clearCells`, `setActiveSheet`, the toolbar commands (`asc_setCellBold`, `asc_setCellAlign`, ... with the paragraph alignment values), undo/redo, copy/cut/paste and saving (xlsx, xlsm, xltx, xltm, ods, ots, csv). `getState` has the fields of the text editors' state plus `sheet`.
 - **Known:** wrapped text in a row with a fixed height runs into the next row (the print path doesn't clip it); a single page of a very large sheet (thousands of pixels each way) loses table styles, which tiles don't.
+
+## Tests
+
+`tests/` has regression tests: scripts that run on document-templates' samples with `eo-render` and check the results (`lib.js` has the assertions). `tests/run.sh` runs them; how to build `eo-render` for the host is in AndroidEditors' `build/scripts/engine-host.sh`.
+
+## Own repository
+
+The engine has no Android code outside `src/jni/` and builds on its own (CMake, against core), so it can be shared with other platforms (an iOS app, with core's JavaScriptCore backend instead of V8). To move it into a repository of its own, keeping its history:
+
+```sh
+git clone https://github.com/Euro-Office/editors-android engine-repo && cd engine-repo
+git filter-repo --subdirectory-filter engine
+```
+
+Then:
+- `third_party/hunspell` becomes a submodule of the new repository (`.gitmodules` with `path = third_party/hunspell`).
+- editors-android takes the new repository as a submodule at `engine/`, so `libeditors` (`path("../engine/CMakeLists.txt")`) and AndroidEditors' scripts keep their paths.
+- The JNI binding (`src/jni/`) can stay in the engine repository behind `if(ANDROID)`, or move to `libeditors`.
