@@ -225,6 +225,165 @@ function createHitContext() {
 	return context;
 }
 
+// Charts, the same in all editors. options: selectedDrawings() as in the editors, insert(type),
+// action(name, change) for one undo step that redraws, sheet: data comes from cells
+function chartCommands(engine, api, options) {
+	function selectedChart() {
+		var items = options.selectedDrawings();
+		for (var i = 0; i < items.length; i++) {
+			var drawing = items[i].drawing;
+			if (drawing.getObjectType && drawing.getObjectType() === AscDFH.historyitem_type_ChartSpace)
+				return drawing;
+		}
+		return null;
+	}
+	// The settings of the selected chart; true: without opening the "frame editor", which stops saving
+	function settings() { return api.asc_getChartSettings(true); }
+
+	// Asc.c_oAscChartTypeSettings
+	engine["insertChart"] = function (type) { options.insert(type); };
+
+	// SmartArt of the type (Asc.c_oAscSmartArtTypes) from its definition file [name].bin. sdkjs
+	// loads these over the web; here they are read from the engine's sdkjs files first.
+	// It is added in a promise: read the state with the next command.
+	engine["insertSmartArt"] = function (type, name) {
+		var directory = window["native"]["GetFontsDirectory"]() + "/SmartArts";
+		var cache = AscCommon.g_oBinarySmartArts;
+		if (!cache.drawingBin.bin)
+			cache.initDrawingFromBin(window["native"]["GetFileBinary"](directory + "/SmartArtDrawing/SmartArtDrawings.bin"));
+		if (!cache.dataBin[type])
+			cache.initDataFromBin(type, window["native"]["GetFileBinary"](directory + "/SmartArtData/" + name + ".bin"));
+		api.asc_createSmartArt(type);
+	};
+
+	// The selected chart: {type, title, legend (Asc.c_oAscChartLegendShowSettings), labels, gridlines}, or null
+	engine["chartState"] = function () {
+		var chart = selectedChart();
+		if (!chart)
+			return null;
+		var current = chart.getAscSettings();
+		return {
+			"type": current.getType(),
+			"title": current.getTitle() !== Asc.c_oAscChartTitleShowSettings.none,
+			"legend": current.getLegendPos(),
+			"labels": !!current.getShowVal(),
+			"gridlines": current.getVertGridLines() !== Asc.c_oAscGridLinesSettings.none || current.getHorGridLines() !== Asc.c_oAscGridLinesSettings.none,
+			"dataInCells": !!options.sheet
+		};
+	};
+
+	// As the web editor: changed on the chart itself, in one undo step
+	engine["setChartType"] = function (type) {
+		var changed = settings();
+		changed.startEdit();
+		if (changed.changeType(type) === false)
+			changed.cancelEdit();
+		else
+			changed.endEdit();
+	};
+
+	engine["setChartElements"] = function (title, legend, labels, gridlines) {
+		var changed = settings();
+		changed.putTitle(title ? Asc.c_oAscChartTitleShowSettings.noOverlay : Asc.c_oAscChartTitleShowSettings.none);
+		changed.putLegendPos(legend);
+		changed.putShowVal(labels);
+		changed.putDataLabelsPos(labels ? Asc.c_oAscChartDataLabelsPos.bestFit : Asc.c_oAscChartDataLabelsPos.none);
+		var lines = gridlines ? Asc.c_oAscGridLinesSettings.major : Asc.c_oAscGridLinesSettings.none;
+		// The value axis' lines: vertical for horizontal bars
+		var horizontalBars = changed.getType() >= Asc.c_oAscChartTypeSettings.hBarNormal && changed.getType() <= Asc.c_oAscChartTypeSettings.hBarPercent3d;
+		if (horizontalBars)
+			changed.putVertGridLines(lines);
+		else
+			changed.putHorGridLines(lines);
+		api.asc_applyChartSettings(changed);
+	};
+
+	// Documents and presentations: the data in the chart, as a table {series: [names],
+	// categories: [names], values: [[per category] per series]}
+	function pointValues(cache) {
+		var values = [];
+		if (cache && cache.pts) {
+			cache.pts.forEach(function (point) { values[point.idx] = point.val; });
+		}
+		return values;
+	}
+	function categories(series) {
+		var cat = series && (series.cat || series.xVal);
+		if (!cat)
+			return [];
+		var cache = (cat.strRef && cat.strRef.strCache) || (cat.numRef && cat.numRef.numCache) || cat.strLit || cat.numLit;
+		return pointValues(cache).map(function (value) { return value === undefined ? "" : String(value); });
+	}
+	engine["getChartData"] = function () {
+		var chart = selectedChart();
+		if (!chart || options.sheet)
+			return "null";
+		var all = chart.getAllSeries();
+		return JSON.stringify({
+			"series": all.map(function (series) {
+				var tx = series.tx;
+				var names = tx && tx.strRef ? pointValues(tx.strRef.strCache) : [];
+				return names.length ? String(names[0]) : (tx && tx.val ? String(tx.val) : "");
+			}),
+			"categories": categories(all[0]),
+			"values": all.map(function (series) {
+				var val = series.val || series.yVal;
+				var cache = val && ((val.numRef && val.numRef.numCache) || val.numLit);
+				return pointValues(cache).map(function (value) { return value === undefined || value === "" ? null : Number(value); });
+			})
+		});
+	};
+	engine["setChartData"] = function (data) {
+		var chart = selectedChart();
+		if (!chart || options.sheet)
+			return;
+		options.action(function () {
+			var rows = data["categories"].length;
+			function column(index) {
+				var name = "";
+				for (index += 1; index > 0; index = Math.floor((index - 1) / 26))
+					name = String.fromCharCode(65 + (index - 1) % 26) + name;
+				return name;
+			}
+			function item(value) {
+				return { numFormatStr: "General", isDateTimeFormat: false, val: value, isHidden: false };
+			}
+			// As the default data of a new chart (getSeriesDefault): categories in A, series in B, C, ...
+			var cat = {
+				Formula: "Sheet1!$A$2:$A$" + (rows + 1),
+				NumCache: data["categories"].map(function (name) { return item(name); })
+			};
+			var plotCharts = chart.chart.plotArea.charts;
+			var target = plotCharts[plotCharts.length - 1];
+			var all = chart.getAllSeries();
+			data["series"].forEach(function (name, index) {
+				var col = column(index + 1);
+				var seria = new AscFormat.asc_CChartSeria();
+				seria.Val.Formula = "Sheet1!$" + col + "$2:$" + col + "$" + (rows + 1);
+				seria.Val.NumCache = data["values"][index].map(function (value) { return item(value === null ? "" : value); });
+				seria.TxCache.Formula = "Sheet1!$" + col + "$1";
+				seria.TxCache.NumCache = [item(name)];
+				seria.Cat = cat;
+				seria.xVal = cat;
+				var series = all[index];
+				if (!series) {
+					// As CChartSpace.addSeries, inside this undo step
+					series = target.series[0] ? target.series[0].createDuplicate() : target.getEmptySeries();
+					chart.setNewSeriesIdxAndOrder(series);
+					target.addSer(series);
+				}
+				series.fillFromAscSeries(seria, true);
+			});
+			for (var i = data["series"].length; i < all.length; i++)
+				all[i].remove();
+			chart.reorderSeries();
+			// The embedded workbook no longer matches: it is written again from the data on saving
+			chart.setXLSX(new Uint8Array(0));
+			chart.onDataUpdate();
+		});
+	};
+}
+
 (function (window) {
 	var api = window["Asc"]["editor"];
 	if (api.editorId === AscCommon.c_oEditorId.Spreadsheet) {
@@ -522,6 +681,11 @@ function createHitContext() {
 			state["structure"] = isPresentation ? null : structureState();
 		} catch (e) {
 			state["structure"] = null;
+		}
+		try {
+			state["chart"] = engine["chartState"]();
+		} catch (e) {
+			state["chart"] = null;
 		}
 		try {
 			state["link"] = linkAtCursor();
@@ -1189,6 +1353,23 @@ function createHitContext() {
 		}
 	});
 
+	chartCommands(engine, api, {
+		selectedDrawings: function () { return editor.selectedDrawings(); },
+		insert: function (type) {
+			engine["finishComposingText"]();
+			// false: without the web editor's chart data editor
+			api.asc_addChartDrawingObject(type, undefined, false);
+		},
+		action: function (change) {
+			logicDocument.StartAction(isPresentation ? AscDFH.historydescription_Presentation_EditChart : AscDFH.historydescription_Document_EditChart);
+			change();
+			logicDocument.FinalizeAction();
+		}
+	});
+	["setChartType", "setChartElements", "setChartData"].forEach(function (name) {
+		engine[name] = drawingCommand(engine[name]);
+	});
+
 	// Presentations: a slide after the current one, with the layout of the current one
 	engine["addSlide"] = function () { api.AddSlide(); };
 	engine["deleteSlide"] = function () { api.DeleteSlide(); };
@@ -1473,6 +1654,7 @@ function spreadsheetEngine(window, api) {
 			"sheet": sheet,
 			"search": search,
 			"link": cellLink(),
+			"chart": engine["chartState"](),
 			"openUrl": openUrl
 		};
 		changed = false;
@@ -1481,6 +1663,27 @@ function spreadsheetEngine(window, api) {
 		openUrl = null;
 		return JSON.stringify(state);
 	};
+
+	chartCommands(engine, api, {
+		selectedDrawings: selectedDrawings,
+		sheet: true,
+		insert: function (type) {
+			// From the selected cells; for one cell, the table of filled cells around it, as in Excel
+			var selected = view().model.selectionRange.getLast();
+			if (selected.isOneCell()) {
+				var around = view().model.autoFilters._getAdjacentCellsAF(selected);
+				if (around && !around.isOneCell())
+					view().setSelection(around);
+			}
+			var settings = api.asc_getChartSettings(true);
+			settings.putType(type);
+			api.asc_addChartDrawingObject(settings);
+		},
+		action: function (change) { change(); }
+	});
+	["insertChart", "setChartType", "setChartElements"].forEach(function (name) {
+		engine[name] = edit(engine[name]);
+	});
 
 	// Search in all sheets: find selects the next or previous matching cell
 	var search = null;
