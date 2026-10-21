@@ -79,7 +79,7 @@ function drawingStates(selected, controller) {
 
 // sdkjs' drawing states (moving, resizing and rotating shapes) read the global mouse state,
 // which the web editor updates for each mouse event. type: 0 down, 1 move, 2 up
-function mouseEvent(type, clickCount, addToSelection) {
+function mouseEvent(type, clickCount, addToSelection, extend) {
 	var global = AscCommon.global_mouseEvent;
 	var e = new AscCommon.CMouseEventHandler();
 	// The spreadsheet editor's controller reads browser-style fields (button, ctrlKey, isLocked)
@@ -87,7 +87,7 @@ function mouseEvent(type, clickCount, addToSelection) {
 	e.metaKey = false;
 	e.ClickCount = global.ClickCount = clickCount;
 	e.CtrlKey = e.ctrlKey = global.CtrlKey = !!addToSelection;
-	e.ShiftKey = e.shiftKey = global.ShiftKey = false;
+	e.ShiftKey = e.shiftKey = global.ShiftKey = !!extend;
 	global.AltKey = false;
 	if (type === 0) {
 		e.Type = global.Type = AscCommon.g_mouse_event_type_down;
@@ -525,6 +525,10 @@ function chartCommands(engine, api, options) {
 	};
 
 	var engine = window["eoEngine"] = {};
+	// Texts sdkjs puts into documents (table of contents, headers, placeholders), by their English text
+	engine["setTranslations"] = function (map) {
+		AscCommon.translateManager.init(map);
+	};
 
 	// Graphics object for the next tile; the engine attaches its pixel buffer before drawTile()
 	engine["tile"] = null;
@@ -720,6 +724,11 @@ function chartCommands(engine, api, options) {
 			state["chart"] = null;
 		}
 		try {
+			state["spelling"] = engine["spellState"]();
+		} catch (e) {
+			state["spelling"] = null;
+		}
+		try {
 			state["link"] = linkAtCursor();
 		} catch (e) {
 			state["link"] = null;
@@ -746,9 +755,10 @@ function chartCommands(engine, api, options) {
 
 	// Mouse/touch input at page coordinates (mm). type: 0 down, 1 move, 2 up
 	// addToSelection: like Ctrl+click, adds a picture or shape to the selected ones
-	engine["mouse"] = function (type, page, x, y, clickCount, addToSelection) {
+	// extend: like Shift+click, extends the selection to the point
+	engine["mouse"] = function (type, page, x, y, clickCount, addToSelection, extend) {
 		engine["finishComposingText"]();
-		var e = mouseEvent(type, clickCount, addToSelection);
+		var e = mouseEvent(type, clickCount, addToSelection, extend);
 		if (type === 0)
 			logicDocument.OnMouseDown(e, x, y, page);
 		else if (type === 1)
@@ -1718,6 +1728,153 @@ function chartCommands(engine, api, options) {
 			api.SlideTransitionApplyToAll();
 	};
 	engine["redo"] = function () { api.Redo(); allPagesChanged(); };
+
+	// Spell checking. sdkjs asks for words to be checked through SpellCheckApi; the requests are
+	// queued here and answered by the app (Hunspell) with spellResults. Languages are sdkjs'
+	// LCIDs; those without a dictionary are collected in "missing" for the app to download.
+	var spelling = { languages: {}, missing: {}, queue: [], property: null };
+	api.SpellCheckApi = {
+		checkDictionary: function (lang) {
+			if (spelling.languages[lang])
+				return true;
+			spelling.missing[lang] = true;
+			return false;
+		},
+		spellCheck: function (data) { spelling.queue.push(data); },
+		disconnect: function () {},
+		restart: function () { spelling.queue = []; }
+	};
+	api.isSpellCheckEnable = true;
+	// Turned off when the editor started without a spell checker (a counter: on at exactly 1)
+	var spellChecker = logicDocument.GetSpellCheckManager ? logicDocument.GetSpellCheckManager() : logicDocument.Spelling;
+	while (spellChecker && spellChecker.Active < 1)
+		spellChecker.TurnOn();
+
+	// The languages with a dictionary; checking starts again with them
+	engine["setSpellLanguages"] = function (langs) {
+		spelling.languages = {};
+		langs.forEach(function (lang) {
+			spelling.languages[lang] = true;
+			delete spelling.missing[lang];
+		});
+		spelling.queue = [];
+		if (api.asc_restartCheckSpelling)
+			api.asc_restartCheckSpelling();
+		continueSpellCheck();
+	};
+
+	engine["setSpellCheck"] = function (on) {
+		api.asc_setSpellCheck(on);
+		allPagesChanged();
+	};
+
+	function continueSpellCheck() {
+		if (logicDocument.ContinueSpellCheck)
+			logicDocument.ContinueSpellCheck();
+	}
+
+	// The queued requests, as JSON: [{type, usrWords, usrLang, ...}]
+	engine["takeSpellRequests"] = function () {
+		var requests = spelling.queue;
+		spelling.queue = [];
+		return JSON.stringify(requests);
+	};
+
+	// Answers to takeSpellRequests (the requests with usrCorrect or usrSuggest); the marks are
+	// drawn again and the next paragraphs are checked
+	engine["spellResults"] = function (json) {
+		var suggested = false;
+		JSON.parse(json).forEach(function (result) {
+			api.SpellCheck_CallBack(result);
+			suggested = suggested || result["type"] === "suggest";
+		});
+		// Suggestions for the word at the cursor reach the state through the interface state
+		if (suggested)
+			logicDocument.Document_UpdateInterfaceState();
+		allPagesChanged();
+		continueSpellCheck();
+	};
+
+	// The misspelled word at the cursor: {word, variants} (variants null while they are looked up)
+	function spellingState() {
+		spelling.property = selectedElement(Asc.c_oAscTypeSelectElement.SpellCheck);
+		var property = spelling.property;
+		if (!property)
+			return null;
+		var variants = property.get_Variants ? property.get_Variants() : property.Variants;
+		return { "word": property.get_Word ? property.get_Word() : property.Word, "variants": variants || null };
+	}
+
+	engine["replaceMisspelled"] = function (variant) {
+		if (spelling.property)
+			api.asc_replaceMisspelledWord(variant, spelling.property);
+	};
+
+	// The word is not marked any more: here, or everywhere in the document
+	engine["ignoreMisspelled"] = function (all) {
+		if (spelling.property)
+			api.asc_ignoreMisspelledWord(spelling.property, all);
+		allPagesChanged();
+	};
+
+	// Text of a page for screen readers: paragraphs of documents (also in tables), text of the
+	// shapes of a slide; each with its area in mm, as JSON [{text, left, top, right, bottom}]
+	engine["textBlocks"] = function (page) {
+		var blocks = [];
+		function add(text, left, top, right, bottom) {
+			text = text.replace(/[\r\n\t]+$/, "").replace(/\r\n?/g, "\n");
+			if (text.trim())
+				blocks.push({ "text": text, "left": left, "top": top, "right": right, "bottom": bottom });
+		}
+		function paragraphs(elements) {
+			elements.forEach(function (element) {
+				if (element.IsParagraph && element.IsParagraph()) {
+					for (var i = 0; i < element.Pages.length; i++) {
+						if (element.GetAbsolutePage(i) !== page)
+							continue;
+						var bounds = element.Pages[i].Bounds;
+						add(element.GetText({ "Numbering": true }), bounds.Left, bounds.Top, bounds.Right, bounds.Bottom);
+					}
+				} else if (element.IsTable && element.IsTable()) {
+					element.Content.forEach(function (row) {
+						row.Content.forEach(function (cell) { paragraphs(cell.Content.Content); });
+					});
+				} else if (element.Content && element.Content.Content) {
+					// Block content controls
+					paragraphs(element.Content.Content);
+				}
+			});
+		}
+		function shapes(drawings) {
+			drawings.forEach(function (drawing) {
+				if (drawing.spTree) {
+					shapes(drawing.spTree);
+					return;
+				}
+				var content = drawing.getDocContent && drawing.getDocContent();
+				var bounds = drawing.bounds;
+				if (content && bounds)
+					add(content.GetText({ "ParaSeparator": "\n" }), bounds.l, bounds.t, bounds.r, bounds.b);
+			});
+		}
+		if (isPresentation) {
+			var slide = logicDocument.Slides[page];
+			if (slide)
+				shapes(slide.cSld.spTree);
+		} else {
+			paragraphs(logicDocument.Content);
+		}
+		return JSON.stringify(blocks);
+	};
+
+	engine["spellState"] = function () {
+		continueSpellCheck();
+		return {
+			"pending": spelling.queue.length > 0,
+			"missing": Object.keys(spelling.missing).map(Number),
+			"word": spellingState()
+		};
+	};
 })(window);
 
 // Spreadsheets. The active sheet is one page: its used cells and some empty ones around them.
@@ -1730,6 +1887,10 @@ function chartCommands(engine, api, options) {
 function spreadsheetEngine(window, api) {
 	var native = window["native"];
 	var engine = window["eoEngine"] = {};
+	// Texts sdkjs puts into documents (table of contents, headers, placeholders), by their English text
+	engine["setTranslations"] = function (map) {
+		AscCommon.translateManager.init(map);
+	};
 	var PX_TO_MM = 25.4 / 96;
 	// Empty columns and rows shown after the used ones, to type into
 	var EXTRA_COLS = 10, EXTRA_ROWS = 50, MIN_COLS = 26, MIN_ROWS = 100;

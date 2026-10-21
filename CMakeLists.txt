@@ -39,19 +39,31 @@ foreach(lib ${CORE_LIBRARIES})
     list(APPEND CORE_LIBRARY_FILES "${CORE_LIBS_PATH}/lib${lib}.so")
 endforeach()
 
-add_library(eoengine SHARED src/Document.cpp src/DrawingDocument.cpp)
+# Hunspell for spell checking (third_party/hunspell, a submodule at the commit core uses)
+set(HUNSPELL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/hunspell/src/hunspell")
+add_library(hunspell STATIC
+    ${HUNSPELL_DIR}/affentry.cxx ${HUNSPELL_DIR}/affixmgr.cxx ${HUNSPELL_DIR}/csutil.cxx
+    ${HUNSPELL_DIR}/filemgr.cxx ${HUNSPELL_DIR}/hashmgr.cxx ${HUNSPELL_DIR}/hunspell.cxx
+    ${HUNSPELL_DIR}/hunzip.cxx ${HUNSPELL_DIR}/phonet.cxx ${HUNSPELL_DIR}/replist.cxx
+    ${HUNSPELL_DIR}/suggestmgr.cxx
+)
+target_include_directories(hunspell PUBLIC "${HUNSPELL_DIR}")
+target_compile_definitions(hunspell PUBLIC HUNSPELL_STATIC)
+set_target_properties(hunspell PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+add_library(eoengine SHARED src/Document.cpp src/DrawingDocument.cpp src/Speller.cpp)
 target_include_directories(eoengine
     PUBLIC src
     PRIVATE "${CORE_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}"
 )
 # Platform defines core's headers expect
 target_compile_definitions(eoengine PRIVATE LINUX _LINUX)
-target_link_libraries(eoengine PRIVATE ${CORE_LIBRARY_FILES})
+target_link_libraries(eoengine PRIVATE ${CORE_LIBRARY_FILES} hunspell)
 set_target_properties(eoengine PROPERTIES BUILD_RPATH "\$ORIGIN" INSTALL_RPATH "\$ORIGIN")
 
 if(ANDROID)
     # JNI binding for libeditors (lib.editors.base.engine.NativeEngine)
-    target_sources(eoengine PRIVATE src/jni/DocumentJni.cpp)
+    target_sources(eoengine PRIVATE src/jni/DocumentJni.cpp src/jni/SpellerJni.cpp)
     target_link_libraries(eoengine PRIVATE jnigraphics log)
 endif()
 
