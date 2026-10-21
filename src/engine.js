@@ -1193,6 +1193,106 @@ function createHitContext() {
 	engine["addSlide"] = function () { api.AddSlide(); };
 	engine["deleteSlide"] = function () { api.DeleteSlide(); };
 	engine["getCurrentSlide"] = function () { return isPresentation ? logicDocument.CurPage : -1; };
+
+	// Slides (the commands act on the current slide): [{hidden, layout, transition}]
+	engine["getSlides"] = function () {
+		var slides = [];
+		for (var i = 0; i < logicDocument.GetSlidesCount(); i++) {
+			var slide = logicDocument.Slides[i];
+			var transition = slide.transition;
+			var typeAndOption = transition && transition.getTypeAndOption ? transition.getTypeAndOption() : null;
+			slides.push({
+				"hidden": !slide.isVisible(),
+				"layout": slide.Layout ? (slide.Layout.getName() || "") : "",
+				"transition": transition ? {
+					"type": (typeAndOption ? typeAndOption.Type : transition.get_TransitionType()) || 0,
+					"option": (typeAndOption ? typeAndOption.Option : transition.get_TransitionOption()) || 0,
+					"duration": transition.get_TransitionDuration() || 0,
+					"onClick": transition.get_SlideAdvanceOnMouseClick() !== false,
+					"after": !!transition.get_SlideAdvanceAfter(),
+					"afterDuration": transition.get_SlideAdvanceDuration() || 0
+				} : null,
+				"notes": notesText(slide)
+			});
+		}
+		return JSON.stringify(slides);
+	};
+	engine["gotoSlide"] = function (index) {
+		engine["finishComposingText"]();
+		api.WordControl.GoToPage(index);
+	};
+	engine["duplicateSlide"] = function () {
+		var current = logicDocument.CurPage;
+		logicDocument.shiftSlides(current + 1, [current], true);
+		api.WordControl.GoToPage(current + 1);
+		allPagesChanged();
+	};
+	// Moves the current slide to [position] (its index afterwards)
+	engine["moveSlide"] = function (position) {
+		var current = logicDocument.CurPage;
+		if (position < 0 || position >= logicDocument.GetSlidesCount() || position === current)
+			return;
+		// shiftSlides takes the position before the move
+		logicDocument.shiftSlides(position > current ? position + 1 : position, [current], false);
+		api.WordControl.GoToPage(position);
+		allPagesChanged();
+	};
+	engine["hideSlide"] = function (hide) {
+		logicDocument.hideSlides(hide, [logicDocument.CurPage]);
+		allPagesChanged();
+	};
+
+	// Layouts of the current slide's master: [{index, name}], index for addSlide and setLayout
+	engine["getLayouts"] = function () {
+		var all = logicDocument.GetAllLayouts();
+		var master = logicDocument.getLayoutsMasterSlide ? logicDocument.getLayoutsMasterSlide() : null;
+		var layouts = master ? master.sldLayoutLst : all;
+		return JSON.stringify(layouts.map(function (layout) {
+			return { "index": all.indexOf(layout), "name": layout.getName() || "" };
+		}));
+	};
+	engine["addSlideWithLayout"] = function (layoutIndex) { api.AddSlide(layoutIndex); };
+	engine["setLayout"] = function (layoutIndex) {
+		api.ChangeLayout(layoutIndex);
+		allPagesChanged();
+	};
+
+	// Speaker notes as plain text
+	function notesText(slide) {
+		var shape = slide.notes && slide.notes.getBodyShape ? slide.notes.getBodyShape() : null;
+		var content = shape && shape.getDocContent ? shape.getDocContent() : null;
+		return content ? content.GetText({ "ParaSeparator": "\n" }).replace(/\n$/, "") : "";
+	}
+	engine["setNotes"] = function (text) {
+		var slide = logicDocument.Slides[logicDocument.CurPage];
+		if (!slide || !slide.notes)
+			return;
+		logicDocument.StartAction(AscDFH.historydescription_Presentation_AddNewParagraph);
+		var shape = slide.notes.getBodyShape() || slide.notes.createBodyShape();
+		var content = shape.getDocContent();
+		content.ClearContent(true);
+		text.split("\n").forEach(function (line, index) {
+			var paragraph = index === 0 ? content.Content[0] : new AscWord.Paragraph(content, true);
+			if (index > 0)
+				content.Internal_Content_Add(content.Content.length, paragraph);
+			var run = new AscWord.Run(paragraph, false);
+			run.AddText(line);
+			paragraph.AddToContent(0, run);
+		});
+		slide.recalculateNotesShape && slide.recalculateNotesShape();
+		logicDocument.FinalizeAction();
+	};
+
+	// Transition of the current slide (or all): Asc.c_oAscSlideTransitionTypes, its option, duration in ms
+	engine["setTransition"] = function (type, option, duration, all) {
+		var transition = new Asc.CAscSlideTransition();
+		transition.put_TransitionType(type);
+		transition.put_TransitionOption(option);
+		transition.put_TransitionDuration(duration);
+		api.ApplySlideTransition(transition);
+		if (all)
+			api.SlideTransitionApplyToAll();
+	};
 	engine["redo"] = function () { api.Redo(); allPagesChanged(); };
 })(window);
 
