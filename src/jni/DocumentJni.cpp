@@ -51,6 +51,16 @@ extern "C"
 		return FromHandle(handle)->Open(ToWide(env, path), ToWide(env, tempDir)) ? JNI_TRUE : JNI_FALSE;
 	}
 
+	// UTF-8 bytes (NewStringUTF would need "modified" UTF-8)
+	JNIEXPORT jbyteArray JNICALL
+	Java_lib_editors_base_engine_NativeEngine_nativeExecute(JNIEnv* env, jobject, jlong handle, jstring script)
+	{
+		std::string result = FromHandle(handle)->Execute(ToWide(env, script));
+		jbyteArray bytes = env->NewByteArray((jsize)result.size());
+		env->SetByteArrayRegion(bytes, 0, (jsize)result.size(), reinterpret_cast<const jbyte*>(result.data()));
+		return bytes;
+	}
+
 	JNIEXPORT jint JNICALL
 	Java_lib_editors_base_engine_NativeEngine_nativeGetPageCount(JNIEnv*, jobject, jlong handle)
 	{

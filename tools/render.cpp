@@ -1,7 +1,10 @@
 // Engine check on the desktop: opens a document, prints its pages and renders page 1
 // once in one piece and once from 256 px tiles, compares both and saves them as PNG.
 //
-// Usage: eo-render <runtime dir> <document> <output dir> [scale]
+// Usage: eo-render <runtime dir> <document> <output dir> [scale] [script.js...]
+//
+// Scripts run in sdkjs after opening (e.g. editing commands from engine.js); their
+// results are printed.
 
 #include "../src/Document.h"
 
@@ -9,6 +12,8 @@
 
 #include <chrono>
 #include <codecvt>
+#include <fstream>
+#include <sstream>
 #include <iostream>
 #include <locale>
 #include <string>
@@ -60,6 +65,16 @@ int main(int argc, char* argv[])
 			return 2;
 		}
 		std::cout << "open + layout: " << MillisecondsSince(start) << " ms" << std::endl;
+
+		for (int i = 5; i < argc; ++i)
+		{
+			std::ifstream file(argv[i]);
+			std::stringstream script;
+			script << file.rdbuf();
+			start = std::chrono::steady_clock::now();
+			std::string result = document.Execute(ToWide(script.str()));
+			std::cout << argv[i] << " (" << MillisecondsSince(start) << " ms): " << result << std::endl;
+		}
 
 		int pageCount = document.GetPageCount();
 		std::cout << "pages: " << pageCount << std::endl;

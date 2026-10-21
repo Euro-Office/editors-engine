@@ -30,6 +30,10 @@ namespace eo
 		bool Open(const std::wstring& path, const std::wstring& tempDir);
 		void Close();
 
+		// Runs JavaScript in the document's context (see engine.js for the editing
+		// commands) and returns its result if that is a string
+		std::string Execute(const std::wstring& script);
+
 		int GetPageCount();
 		PageSize GetPageSize(int page);
 

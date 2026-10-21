@@ -164,6 +164,14 @@ namespace eo
 		RELEASEINTERFACE(m_private->imageCache);
 	}
 
+	std::string Document::Execute(const std::wstring& script)
+	{
+		CDocBuilderValue result;
+		if (!m_private->Run(script, &result) || !result.IsString())
+			return std::string();
+		return std::wstring_convert<std::codecvt_utf8<wchar_t>>().to_bytes(result.ToString().c_str());
+	}
+
 	int Document::GetPageCount()
 	{
 		return (int)m_private->RunNumber(L"eoEngine.getPageCount()");
