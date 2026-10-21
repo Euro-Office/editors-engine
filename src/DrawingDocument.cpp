@@ -7,7 +7,10 @@
 #include "PdfFile/PdfFile.h"
 #include "XpsFile/XpsFile.h"
 
+#include <algorithm>
 #include <cmath>
+#include <cctype>
+#include <cstdlib>
 #include <cstring>
 
 namespace eo
@@ -236,6 +239,377 @@ namespace eo
 			data += 4;
 			return value;
 		}
+
+		const float MM_PER_POINT = 25.4f / 72;
+
+		// Reads core's NSWasm::CData buffers (serialize.h): ints, doubles stored as int * 100
+		// (AddDouble) or * 10000 (WriteDouble), bytes and UTF-8 strings after their length.
+		// Reading past the end stops it (ok is false then).
+		struct WasmReader
+		{
+			const BYTE* current;
+			const BYTE* end;
+			bool ok = true;
+
+			bool Has(size_t size)
+			{
+				if (!ok || current + size > end)
+					ok = false;
+				return ok;
+			}
+			int Int()
+			{
+				if (!Has(4))
+					return 0;
+				int value;
+				memcpy(&value, current, 4);
+				current += 4;
+				return value;
+			}
+			BYTE Byte()
+			{
+				if (!Has(1))
+					return 0;
+				return *current++;
+			}
+			double Double100() { return Int() / 100.0; }
+			double Double10000() { return Int() / 10000.0; }
+			std::string String()
+			{
+				int length = Int();
+				if (length < 0 || !Has((size_t)length))
+					return std::string();
+				std::string value(reinterpret_cast<const char*>(current), length);
+				current += length;
+				return value;
+			}
+			void Doubles100(int count) { for (int i = 0; i < count && ok; ++i) Int(); }
+			void Doubles10000(int count) { Doubles100(count); }
+			void List100() { Doubles100(Int()); }
+			void List10000() { Doubles10000(Int()); }
+		};
+
+		// An action (CAction*::ToWASM in core's PdfAnnot.cpp); the first one sets the link's target
+		void ReadAction(WasmReader& in, int page, int pageCount, PageLink& link)
+		{
+			BYTE type = in.Byte();
+			bool first = link.url.empty() && link.destPage < 0;
+			switch (type)
+			{
+			case 1: // GoTo
+			{
+				int destPage = in.Int();
+				BYTE kind = in.Byte();
+				double top = 0;
+				// XYZ, FitH, FitV, FitBH, FitBV: left, top, zoom by flags; FitR: a rectangle
+				if (kind == 0 || kind == 2 || kind == 3 || kind == 6 || kind == 7)
+				{
+					int flags = in.Int();
+					double values[3] = { 0, 0, 0 };
+					for (int i = 0; i < 3; ++i)
+						if (flags & (1 << i))
+							values[i] = in.Double100();
+					top = kind == 2 || kind == 6 ? values[0] : values[1];
+				}
+				else if (kind == 4)
+				{
+					in.Double100();
+					top = in.Double100();
+					in.Double100();
+					in.Double100();
+				}
+				if (first)
+				{
+					link.destPage = destPage;
+					link.destY = (float)(top * MM_PER_POINT);
+				}
+				break;
+			}
+			case 6: // URI
+			{
+				std::string uri = in.String();
+				if (first)
+					link.url = uri;
+				break;
+			}
+			case 10: // Named: next, previous, first or last page
+			{
+				std::string name = in.String();
+				if (first)
+				{
+					if (name == "NextPage")
+						link.destPage = std::min(page + 1, pageCount - 1);
+					else if (name == "PrevPage")
+						link.destPage = std::max(page - 1, 0);
+					else if (name == "FirstPage")
+						link.destPage = 0;
+					else if (name == "LastPage")
+						link.destPage = pageCount - 1;
+				}
+				break;
+			}
+			case 14: // JavaScript
+				in.String();
+				break;
+			case 9: // Hide
+			{
+				in.Byte();
+				int count = in.Int();
+				for (int i = 0; i < count && in.ok; ++i)
+					in.String();
+				break;
+			}
+			case 12: // ResetForm
+			{
+				in.Int();
+				int count = in.Int();
+				for (int i = 0; i < count && in.ok; ++i)
+					in.String();
+				break;
+			}
+			default:
+				in.ok = false;
+				return;
+			}
+			if (in.Byte())
+				ReadAction(in, page, pageCount, link);
+		}
+
+		// The fields of all annotations (CAnnot::ToWASM); returns the rectangle in points
+		void ReadAnnot(WasmReader& in, double rect[4])
+		{
+			in.Int(); // reference
+			in.Int(); // flags
+			in.Int(); // page
+			for (int i = 0; i < 4; ++i)
+				rect[i] = in.Double10000();
+			int flags = in.Int();
+			if (flags & (1 << 0))
+				in.String();
+			if (flags & (1 << 1))
+				in.String();
+			if (flags & (1 << 2))
+			{
+				in.Byte();
+				in.Double100();
+			}
+			if (flags & (1 << 3))
+				in.List10000();
+			if (flags & (1 << 4))
+			{
+				// Dashed borders (written as 2) have a dash pattern
+				BYTE border = in.Byte();
+				in.Double100();
+				if (border == 2)
+					in.List100();
+			}
+			if (flags & (1 << 5))
+				in.String();
+			if (flags & (1 << 7))
+				in.String();
+			if (flags & (1 << 9))
+				in.String();
+		}
+
+		// The fields of markup annotations (CAnnotMarkup::ToWASM); returns their flags
+		int ReadMarkup(WasmReader& in, double rect[4])
+		{
+			ReadAnnot(in, rect);
+			int flags = in.Int();
+			if (flags & (1 << 0))
+				in.Int();
+			if (flags & (1 << 1))
+				in.String();
+			if (flags & (1 << 2))
+				in.Double100();
+			if (flags & (1 << 3))
+			{
+				int count = in.Int();
+				for (int i = 0; i < count && in.ok; ++i)
+				{
+					in.Byte();
+					int fontFlags = in.Int();
+					if (fontFlags & (1 << 5))
+						in.Double100();
+					if (fontFlags & (1 << 6))
+						in.String();
+					in.Double100();
+					in.Doubles10000(3);
+					in.String();
+					in.String();
+				}
+			}
+			if (flags & (1 << 4))
+				in.String();
+			if (flags & (1 << 5))
+				in.Int();
+			if (flags & (1 << 6))
+				in.Byte();
+			if (flags & (1 << 7))
+				in.String();
+			return flags;
+		}
+
+		// Link annotations of a page from core's GetAnnots (PdfReader.cpp, PdfAnnot.cpp ToWASM).
+		// Its records have no lengths, so every kind it writes is read to get past it.
+		std::vector<PageLink> ReadLinkAnnots(const BYTE* data, int page, int pageCount)
+		{
+			std::vector<PageLink> links;
+			WasmReader in{ data, data + 4 };
+			in.end = data + (unsigned int)in.Int();
+			int count = in.Int();
+			for (int i = 0; i < count && in.ok; ++i)
+			{
+				BYTE type = in.Byte();
+				double rect[4] = { 0, 0, 0, 0 };
+				int flags = 0;
+				switch (type)
+				{
+				case 1: // Link
+				{
+					ReadAnnot(in, rect);
+					PageLink link;
+					flags = in.Int();
+					if (flags & (1 << 0))
+						ReadAction(in, page, pageCount, link);
+					if (flags & (1 << 1))
+						ReadAction(in, page, pageCount, link);
+					if (flags & (1 << 2))
+						in.Byte();
+					if (flags & (1 << 3))
+						in.List100();
+					if (in.ok && (!link.url.empty() || link.destPage >= 0))
+					{
+						link.x = (float)(std::min(rect[0], rect[2]) * MM_PER_POINT);
+						link.y = (float)(std::min(rect[1], rect[3]) * MM_PER_POINT);
+						link.width = (float)(std::fabs(rect[2] - rect[0]) * MM_PER_POINT);
+						link.height = (float)(std::fabs(rect[3] - rect[1]) * MM_PER_POINT);
+						links.push_back(link);
+					}
+					break;
+				}
+				case 0: // Text
+					flags = ReadMarkup(in, rect);
+					for (int bit = 16; bit <= 18; ++bit)
+						if (flags & (1 << bit))
+							in.Byte();
+					break;
+				case 2: // FreeText
+					flags = ReadMarkup(in, rect);
+					in.Byte();
+					in.Int();
+					if (flags & (1 << 15))
+						in.Doubles100(4);
+					if (flags & (1 << 16))
+						in.List100();
+					if (flags & (1 << 17))
+						in.String();
+					if (flags & (1 << 18))
+						in.Byte();
+					if (flags & (1 << 20))
+						in.Byte();
+					if (flags & (1 << 21))
+						in.List10000();
+					break;
+				case 3: // Line
+					flags = ReadMarkup(in, rect);
+					in.Doubles100(4);
+					if (flags & (1 << 15))
+					{
+						in.Byte();
+						in.Byte();
+					}
+					if (flags & (1 << 16))
+						in.List10000();
+					if (flags & (1 << 17))
+						in.Double100();
+					if (flags & (1 << 18))
+						in.Double100();
+					if (flags & (1 << 20))
+						in.Byte();
+					if (flags & (1 << 21))
+						in.Double100();
+					if (flags & (1 << 22))
+						in.Byte();
+					if (flags & (1 << 23))
+						in.Doubles100(2);
+					break;
+				case 4: // Square
+				case 5: // Circle
+					flags = ReadMarkup(in, rect);
+					if (flags & (1 << 15))
+						in.Doubles100(4);
+					if (flags & (1 << 16))
+						in.List10000();
+					break;
+				case 6: // Polygon
+				case 7: // PolyLine
+					flags = ReadMarkup(in, rect);
+					in.List100();
+					if (flags & (1 << 15))
+					{
+						in.Byte();
+						in.Byte();
+					}
+					if (flags & (1 << 16))
+						in.List10000();
+					if (flags & (1 << 20))
+						in.Byte();
+					break;
+				case 8: // Highlight, Underline, Squiggly, StrikeOut
+				case 9:
+				case 10:
+				case 11:
+					ReadMarkup(in, rect);
+					in.List100();
+					break;
+				case 12: // Stamp
+					ReadMarkup(in, rect);
+					in.String();
+					in.Doubles10000(9);
+					break;
+				case 13: // Caret
+					flags = ReadMarkup(in, rect);
+					if (flags & (1 << 15))
+						in.Doubles100(4);
+					if (flags & (1 << 16))
+						in.Byte();
+					break;
+				case 14: // Ink
+				{
+					ReadMarkup(in, rect);
+					int paths = in.Int();
+					for (int p = 0; p < paths && in.ok; ++p)
+						in.List100();
+					break;
+				}
+				case 25: // Redact
+					flags = ReadMarkup(in, rect);
+					if (flags & (1 << 15))
+						in.List100();
+					if (flags & (1 << 16))
+						in.List10000();
+					if (flags & (1 << 17))
+						in.String();
+					if (flags & (1 << 19))
+						in.Byte();
+					if (flags & (1 << 20))
+					{
+						in.List10000();
+						in.Double100();
+						in.String();
+						in.String();
+						in.Int();
+					}
+					break;
+				default:
+					// A kind this doesn't know: the rest can't be read
+					in.ok = false;
+					break;
+				}
+			}
+			return links;
+		}
 	}
 
 	struct DrawingDocument::Private
@@ -243,6 +617,7 @@ namespace eo
 		std::unique_ptr<IOfficeDrawingFile> file;
 		Format format = Format::Unknown;
 		NSFonts::IFontManager* fontManager = nullptr;
+		std::wstring path;
 	};
 
 	DrawingDocument::DrawingDocument() : m_private(new Private()) {}
@@ -279,6 +654,7 @@ namespace eo
 			return needsPassword ? NeedsPassword : Failed;
 		}
 		m_private->format = format;
+		m_private->path = path;
 
 		m_private->fontManager = fonts->GenerateFontManager();
 		NSFonts::IFontsCache* fontCache = NSFonts::NSFontCache::Create();
@@ -405,6 +781,14 @@ namespace eo
 		std::vector<PageLink> result;
 		if (m_private->format != Format::Pdf || page < 0 || page >= GetPageCount())
 			return result;
+		// Link annotations: places in the file and web addresses
+		if (BYTE* annots = static_cast<CPdfFile*>(m_private->file.get())->GetAnnots(page))
+		{
+			result = ReadLinkAnnots(annots, page, GetPageCount());
+			free(annots);
+		}
+		size_t annotLinks = result.size();
+		// Web addresses written in the text (not where a link annotation is)
 		BYTE* data = m_private->file->GetLinks(page);
 		if (!data)
 			return result;
@@ -428,9 +812,197 @@ namespace eo
 			link.y = (int)ReadInt(current) * mmPerUnit;
 			link.width = (int)ReadInt(current) * mmPerUnit;
 			link.height = (int)ReadInt(current) * mmPerUnit;
-			result.push_back(link);
+			bool covered = false;
+			for (size_t i = 0; i < annotLinks; ++i)
+			{
+				const PageLink& other = result[i];
+				covered = covered || (link.x < other.x + other.width && other.x < link.x + link.width &&
+				                      link.y < other.y + other.height && other.y < link.y + link.height);
+			}
+			if (!covered)
+				result.push_back(link);
 		}
 		free(data);
 		return result;
+	}
+
+	std::vector<OutlineItem> DrawingDocument::GetOutline()
+	{
+		std::vector<OutlineItem> result;
+		if (!m_private->file)
+			return result;
+		BYTE* data = m_private->file->GetStructure();
+		if (!data)
+			return result;
+		// [length] then per entry: page, level, distance from the page's top (points * 100), title
+		WasmReader in{ data, data + 4 };
+		in.end = data + (unsigned int)in.Int();
+		while (in.ok && in.current < in.end)
+		{
+			OutlineItem item;
+			item.page = in.Int();
+			item.level = in.Int();
+			item.y = (float)(in.Double100() * MM_PER_POINT);
+			item.title = in.String();
+			if (in.ok)
+				result.push_back(item);
+		}
+		free(data);
+		return result;
+	}
+
+	namespace
+	{
+		// Writes the format of NSOnlineOfficeBinToPdf::CBufferReader (MetafileToRendererReader.h):
+		// little-endian ints, doubles as int * 100000, strings as UTF-16 after their length
+		struct BinWriter
+		{
+			std::vector<BYTE> data;
+
+			void Byte(BYTE value) { data.push_back(value); }
+			void Int(int value)
+			{
+				BYTE bytes[4];
+				memcpy(bytes, &value, 4);
+				data.insert(data.end(), bytes, bytes + 4);
+			}
+			void Double(double value) { Int((int)std::lround(value * 100000)); }
+			void String(const std::wstring& text)
+			{
+				std::u16string utf16;
+				for (wchar_t c : text)
+				{
+					if (c >= 0x10000)
+					{
+						utf16 += (char16_t)(0xD800 + ((c - 0x10000) >> 10));
+						utf16 += (char16_t)(0xDC00 + ((c - 0x10000) & 0x3FF));
+					}
+					else
+					{
+						utf16 += (char16_t)c;
+					}
+				}
+				unsigned short length = (unsigned short)utf16.size();
+				data.push_back(length & 0xFF);
+				data.push_back(length >> 8);
+				for (char16_t c : utf16)
+				{
+					data.push_back(c & 0xFF);
+					data.push_back(c >> 8);
+				}
+			}
+			void SetInt(size_t position, int value) { memcpy(&data[position], &value, 4); }
+		};
+
+		const double POINTS_PER_MM = 72 / 25.4;
+
+		// Whether the PDF's last cross-reference (startxref) is where it says: an incremental
+		// update has to point to it. Files with wrong offsets are read by rebuilding it, and
+		// are saved as new files then.
+		bool HasValidXref(const std::wstring& path)
+		{
+			NSFile::CFileBinary file;
+			if (!file.OpenFile(path))
+				return false;
+			long size = file.GetFileSize();
+			long tail = std::min<long>(size, 1024);
+			std::string end(tail, '\0');
+			DWORD read = 0;
+			file.SeekFile(size - tail);
+			file.ReadFile(reinterpret_cast<BYTE*>(&end[0]), (DWORD)tail, read);
+			size_t keyword = end.rfind("startxref");
+			if (keyword == std::string::npos)
+				return false;
+			long offset = std::strtol(end.c_str() + keyword + 9, nullptr, 10);
+			if (offset <= 0 || offset >= size)
+				return false;
+			// A cross-reference table ("xref") or stream ("n g obj")
+			std::string start(32, '\0');
+			file.SeekFile(offset);
+			file.ReadFile(reinterpret_cast<BYTE*>(&start[0]), 32, read);
+			file.CloseFile();
+			start.resize(read);
+			if (start.compare(0, 4, "xref") == 0)
+				return true;
+			size_t i = 0;
+			while (i < start.size() && isdigit((unsigned char)start[i])) ++i;
+			return i > 0 && start.find(" obj") != std::string::npos;
+		}
+
+		// One EditPage record of AddBinToPdf (OnlineOfficeBinToPdf.cpp) with an annotation
+		// (ctAnnotField, read by CAnnotFieldInfo::Read in AnnotField.cpp)
+		void WriteMarkup(BinWriter& out, const PdfMarkup& markup, int id)
+		{
+			if (markup.quads.size() < 8)
+				return;
+			double left = 1e9, top = 1e9, right = -1e9, bottom = -1e9;
+			for (size_t i = 0; i + 1 < markup.quads.size(); i += 2)
+			{
+				left = std::min(left, (double)markup.quads[i]);
+				right = std::max(right, (double)markup.quads[i]);
+				top = std::min(top, (double)markup.quads[i + 1]);
+				bottom = std::max(bottom, (double)markup.quads[i + 1]);
+			}
+			size_t record = out.data.size();
+			out.Int(0); // length of the record
+			out.Byte(0); // EditPage
+			out.Int(markup.page);
+
+			out.Byte(164); // ctAnnotField
+			size_t command = out.data.size();
+			out.Int(0); // length of the command, with this int
+			out.Byte((BYTE)markup.type);
+			out.Int(id);
+			out.Int(4); // flags: print
+			out.Int(markup.page);
+			out.Double(left * POINTS_PER_MM);
+			out.Double(top * POINTS_PER_MM);
+			out.Double(right * POINTS_PER_MM);
+			out.Double(bottom * POINTS_PER_MM);
+			out.Int(1 << 3); // the color
+			out.Int(3);
+			out.Double(markup.red);
+			out.Double(markup.green);
+			out.Double(markup.blue);
+			// Markup: author and opacity (highlights let the text show)
+			out.Int((1 << 1) | (1 << 2));
+			out.String(markup.author);
+			out.Double(markup.type == 8 ? 0.5 : 1.0);
+			out.Int((int)markup.quads.size());
+			for (float value : markup.quads)
+				out.Double(value * POINTS_PER_MM);
+			out.SetInt(command, (int)(out.data.size() - command));
+			out.SetInt(record, (int)(out.data.size() - record));
+		}
+	}
+
+	int DrawingDocument::SaveWithChanges(const std::wstring& path, const std::vector<PdfMarkup>& markups, const std::vector<PdfImage>& images)
+	{
+		if (m_private->format != Format::Pdf)
+			return -1;
+		CPdfFile* pdf = static_cast<CPdfFile*>(m_private->file.get());
+		if (!pdf->EditPdf(path))
+			return -2;
+		if (!HasValidXref(m_private->path))
+			pdf->SetEditType(1);
+		if (!markups.empty())
+		{
+			BinWriter out;
+			int id = pdf->GetMaxRefID() + 1;
+			for (const PdfMarkup& markup : markups)
+				WriteMarkup(out, markup, id++);
+			CConvertFromBinParams params;
+			if (!out.data.empty())
+				pdf->AddToPdfFromBinary(out.data.data(), (unsigned int)out.data.size(), &params);
+		}
+		for (const PdfImage& image : images)
+		{
+			if (!pdf->EditPage(image.page))
+				continue;
+			pdf->DrawImageFromFile(image.path, image.x, image.y, image.width, image.height);
+		}
+		pdf->Close();
+		Close();
+		return NSFile::CFileBinary::Exists(path) ? 0 : -2;
 	}
 }

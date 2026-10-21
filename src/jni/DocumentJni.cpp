@@ -191,7 +191,7 @@ extern "C"
 		return result;
 	}
 
-	// [addresses, areas (x, y, width, height)] (eo::PageLink)
+	// [addresses, (x, y, width, height, destination page, destination y) per link] (eo::PageLink)
 	JNIEXPORT jobjectArray JNICALL
 	Java_lib_editors_base_engine_NativeEngine_nativeGetDrawingLinks(JNIEnv* env, jobject, jlong handle, jint page)
 	{
@@ -201,7 +201,7 @@ extern "C"
 		for (size_t i = 0; i < links.size(); ++i)
 		{
 			env->SetObjectArrayElement(urls, (jsize)i, env->NewStringUTF(links[i].url.c_str()));
-			values.insert(values.end(), { links[i].x, links[i].y, links[i].width, links[i].height });
+			values.insert(values.end(), { links[i].x, links[i].y, links[i].width, links[i].height, (float)links[i].destPage, links[i].destY });
 		}
 		jfloatArray areas = env->NewFloatArray((jsize)values.size());
 		env->SetFloatArrayRegion(areas, 0, (jsize)values.size(), values.data());
@@ -209,5 +209,75 @@ extern "C"
 		env->SetObjectArrayElement(result, 0, urls);
 		env->SetObjectArrayElement(result, 1, areas);
 		return result;
+	}
+
+	// [titles, (level, page, y) per entry] (eo::OutlineItem)
+	JNIEXPORT jobjectArray JNICALL
+	Java_lib_editors_base_engine_NativeEngine_nativeGetDrawingOutline(JNIEnv* env, jobject, jlong handle)
+	{
+		std::vector<eo::OutlineItem> outline = DrawingFromHandle(handle)->GetOutline();
+		jobjectArray titles = env->NewObjectArray((jsize)outline.size(), env->FindClass("java/lang/String"), nullptr);
+		std::vector<float> values;
+		for (size_t i = 0; i < outline.size(); ++i)
+		{
+			// Titles are UTF-8 from the file; invalid bytes would abort NewStringUTF
+			std::u16string title = std::wstring_convert<std::codecvt_utf8_utf16<char16_t>, char16_t>("?", u"?").from_bytes(outline[i].title);
+			env->SetObjectArrayElement(titles, (jsize)i, env->NewString(reinterpret_cast<const jchar*>(title.data()), (jsize)title.size()));
+			values.insert(values.end(), { (float)outline[i].level, (float)outline[i].page, outline[i].y });
+		}
+		jfloatArray numbers = env->NewFloatArray((jsize)values.size());
+		env->SetFloatArrayRegion(numbers, 0, (jsize)values.size(), values.data());
+		jobjectArray result = env->NewObjectArray(2, env->FindClass("java/lang/Object"), nullptr);
+		env->SetObjectArrayElement(result, 0, titles);
+		env->SetObjectArrayElement(result, 1, numbers);
+		return result;
+	}
+
+	// Markups: (page, type, quad count) per markup in markupInts, colors (3 per markup) and
+	// quads (8 per quad) in markupFloats; images: page per image, paths, (x, y, width, height)
+	// per image. 0 or an error (eo::DrawingDocument::SaveWithChanges); the document is closed then.
+	JNIEXPORT jint JNICALL
+	Java_lib_editors_base_engine_NativeEngine_nativeSaveDrawingWithChanges(JNIEnv* env, jobject, jlong handle, jstring path,
+	                                                                     jintArray markupInts, jfloatArray markupFloats, jstring author,
+	                                                                     jintArray imagePages, jobjectArray imagePaths, jfloatArray imageAreas)
+	{
+		std::vector<eo::PdfMarkup> markups;
+		jsize intCount = env->GetArrayLength(markupInts);
+		std::vector<jint> ints(intCount);
+		env->GetIntArrayRegion(markupInts, 0, intCount, ints.data());
+		jsize floatCount = env->GetArrayLength(markupFloats);
+		std::vector<jfloat> floats(floatCount);
+		env->GetFloatArrayRegion(markupFloats, 0, floatCount, floats.data());
+		std::wstring authorName = ToWide(env, author);
+		size_t next = 0;
+		for (jsize i = 0; i + 2 < intCount; i += 3)
+		{
+			eo::PdfMarkup markup;
+			markup.page = ints[i];
+			markup.type = ints[i + 1];
+			int quads = ints[i + 2];
+			if (next + 3 + 8 * quads > floats.size())
+				break;
+			markup.red = floats[next];
+			markup.green = floats[next + 1];
+			markup.blue = floats[next + 2];
+			markup.quads.assign(floats.begin() + next + 3, floats.begin() + next + 3 + 8 * quads);
+			markup.author = authorName;
+			next += 3 + 8 * quads;
+			markups.push_back(markup);
+		}
+
+		std::vector<eo::PdfImage> images;
+		jsize imageCount = env->GetArrayLength(imagePages);
+		std::vector<jint> pages(imageCount);
+		env->GetIntArrayRegion(imagePages, 0, imageCount, pages.data());
+		std::vector<jfloat> areas(4 * imageCount);
+		env->GetFloatArrayRegion(imageAreas, 0, 4 * imageCount, areas.data());
+		for (jsize i = 0; i < imageCount; ++i)
+		{
+			jstring imagePath = (jstring)env->GetObjectArrayElement(imagePaths, i);
+			images.push_back({ pages[i], ToWide(env, imagePath), areas[4 * i], areas[4 * i + 1], areas[4 * i + 2], areas[4 * i + 3] });
+		}
+		return DrawingFromHandle(handle)->SaveWithChanges(ToWide(env, path), markups, images);
 	}
 }

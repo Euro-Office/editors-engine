@@ -166,7 +166,47 @@ int main(int argc, char* argv[])
 				std::cout << "  box " << i << ": " << text.boxes[4 * i] << ", " << text.boxes[4 * i + 1] << ", "
 				          << text.boxes[4 * i + 2] << ", " << text.boxes[4 * i + 3] << std::endl;
 			for (const eo::PageLink& link : document.GetLinks(page))
-				std::cout << "  link " << link.url << " at " << link.x << ", " << link.y << " (" << link.width << " x " << link.height << ")" << std::endl;
+				std::cout << "  link " << link.url << " page " << link.destPage << " y " << link.destY << " at " << link.x << ", " << link.y
+				          << " (" << link.width << " x " << link.height << ")" << std::endl;
+			std::vector<eo::OutlineItem> outline = document.GetOutline();
+			std::cout << "outline: " << outline.size() << " entries" << std::endl;
+			for (size_t i = 0; i < std::min<size_t>(outline.size(), 8); ++i)
+				std::cout << "  " << std::string(2 * outline[i].level, ' ') << outline[i].title << " -> page " << outline[i].page + 1
+				          << " y " << outline[i].y << std::endl;
+		}
+		// EO_PDF_EDIT=<path>: saves the PDF with a highlight on page 1's first line, an
+		// underline on its second and EO_PDF_IMAGE (a PNG) at 120, 250 mm, 50 x 20 mm
+		if (const char* editPath = getenv("EO_PDF_EDIT"))
+		{
+			eo::PageText text = document.GetPageText(0);
+			std::vector<eo::PdfMarkup> markups;
+			auto lineQuad = [&](size_t from, size_t to, int type)
+			{
+				eo::PdfMarkup markup;
+				markup.page = 0;
+				markup.type = type;
+				markup.author = L"eo-render";
+				float left = text.boxes[4 * from], top = text.boxes[4 * from + 1];
+				float right = text.boxes[4 * to + 2], bottom = text.boxes[4 * to + 3];
+				markup.quads = { left, top, right, top, left, bottom, right, bottom };
+				if (type == 9) { markup.red = 0; markup.green = 0; markup.blue = 1; }
+				markups.push_back(markup);
+			};
+			size_t firstBreak = text.text.find(u'\n');
+			size_t secondBreak = text.text.find(u'\n', firstBreak + 1);
+			if (getenv("EO_PDF_NO_MARKUPS"))
+				firstBreak = secondBreak = std::u16string::npos;
+			if (firstBreak != std::u16string::npos && firstBreak > 0)
+				lineQuad(0, firstBreak - 1, 8);
+			if (secondBreak != std::u16string::npos && firstBreak != std::u16string::npos)
+				lineQuad(firstBreak + 1, secondBreak - 1, 9);
+			std::vector<eo::PdfImage> images;
+			if (const char* image = getenv("EO_PDF_IMAGE"))
+				images.push_back({ 0, ToWide(image), 120, 250, 50, 20 });
+			int saved = document.SaveWithChanges(ToWide(editPath), markups, images);
+			std::cout << "saved with " << markups.size() << " markups: " << saved << std::endl;
+			eo::Document::Dispose();
+			return saved;
 		}
 		int exitCode = CheckRendering(document, scale, outDir);
 		document.Close();
