@@ -9,6 +9,7 @@
 #include <codecvt>
 #include <locale>
 #include <string>
+#include <vector>
 
 namespace
 {
@@ -173,5 +174,38 @@ extern "C"
 		                                                      static_cast<unsigned char*>(pixels), true);
 		AndroidBitmap_unlockPixels(env, bitmap);
 		return rendered ? JNI_TRUE : JNI_FALSE;
+	}
+
+	// [text, boxes] (eo::PageText)
+	JNIEXPORT jobjectArray JNICALL
+	Java_lib_editors_base_engine_NativeEngine_nativeGetDrawingPageText(JNIEnv* env, jobject, jlong handle, jint page)
+	{
+		eo::PageText text = DrawingFromHandle(handle)->GetPageText(page);
+		jobjectArray result = env->NewObjectArray(2, env->FindClass("java/lang/Object"), nullptr);
+		env->SetObjectArrayElement(result, 0, env->NewString(reinterpret_cast<const jchar*>(text.text.data()), (jsize)text.text.size()));
+		jfloatArray boxes = env->NewFloatArray((jsize)text.boxes.size());
+		env->SetFloatArrayRegion(boxes, 0, (jsize)text.boxes.size(), text.boxes.data());
+		env->SetObjectArrayElement(result, 1, boxes);
+		return result;
+	}
+
+	// [addresses, areas (x, y, width, height)] (eo::PageLink)
+	JNIEXPORT jobjectArray JNICALL
+	Java_lib_editors_base_engine_NativeEngine_nativeGetDrawingLinks(JNIEnv* env, jobject, jlong handle, jint page)
+	{
+		std::vector<eo::PageLink> links = DrawingFromHandle(handle)->GetLinks(page);
+		jobjectArray urls = env->NewObjectArray((jsize)links.size(), env->FindClass("java/lang/String"), nullptr);
+		std::vector<float> values;
+		for (size_t i = 0; i < links.size(); ++i)
+		{
+			env->SetObjectArrayElement(urls, (jsize)i, env->NewStringUTF(links[i].url.c_str()));
+			values.insert(values.end(), { links[i].x, links[i].y, links[i].width, links[i].height });
+		}
+		jfloatArray areas = env->NewFloatArray((jsize)values.size());
+		env->SetFloatArrayRegion(areas, 0, (jsize)values.size(), values.data());
+		jobjectArray result = env->NewObjectArray(2, env->FindClass("java/lang/Object"), nullptr);
+		env->SetObjectArrayElement(result, 0, urls);
+		env->SetObjectArrayElement(result, 1, areas);
+		return result;
 	}
 }

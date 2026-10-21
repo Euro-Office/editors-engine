@@ -137,6 +137,24 @@ int main(int argc, char* argv[])
 			return 2;
 		}
 		std::cout << "open: " << MillisecondsSince(start) << " ms" << std::endl;
+		// EO_TEXT=<page>: the page's text, the boxes of its first characters and its links
+		if (const char* textPage = getenv("EO_TEXT"))
+		{
+			int page = std::atoi(textPage);
+			start = std::chrono::steady_clock::now();
+			eo::PageText text = document.GetPageText(page);
+			std::cout << "text of page " << page + 1 << " (" << MillisecondsSince(start) << " ms, "
+			          << text.text.size() << " units):" << std::endl
+			          << std::wstring_convert<std::codecvt_utf8_utf16<char16_t>, char16_t>().to_bytes(text.text) << std::endl;
+			std::ofstream boxes(outDir + "/boxes.txt");
+			for (float value : text.boxes)
+				boxes << value << "\n";
+			for (size_t i = 0; i < std::min<size_t>(text.text.size(), 12); ++i)
+				std::cout << "  box " << i << ": " << text.boxes[4 * i] << ", " << text.boxes[4 * i + 1] << ", "
+				          << text.boxes[4 * i + 2] << ", " << text.boxes[4 * i + 3] << std::endl;
+			for (const eo::PageLink& link : document.GetLinks(page))
+				std::cout << "  link " << link.url << " at " << link.x << ", " << link.y << " (" << link.width << " x " << link.height << ")" << std::endl;
+		}
 		int exitCode = CheckRendering(document, scale, outDir);
 		document.Close();
 		eo::Document::Dispose();

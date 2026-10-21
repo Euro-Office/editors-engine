@@ -317,6 +317,9 @@ function createHitContext() {
 			drawingDocument.SlideCurrent = slide;
 			logicDocument.Set_CurPage(slide);
 		};
+		api.WordControl.GetSlidesCount = function () { return logicDocument.GetSlidesCount(); };
+		api.WordControl.onNextPage = function () { api.WordControl.GoToPage(logicDocument.CurPage + 1); };
+		api.WordControl.onPrevPage = function () { api.WordControl.GoToPage(logicDocument.CurPage - 1); };
 	}
 	// Page for selections sdkjs draws relative to a shape (presentations)
 	var selectionPage = null;
@@ -515,10 +518,16 @@ function createHitContext() {
 		} catch (e) {
 			state["format"] = {};
 		}
+		try {
+			state["link"] = linkAtCursor();
+		} catch (e) {
+			state["link"] = null;
+		}
 		var result = JSON.stringify(state);
 		state["dirtyPages"] = {};
 		state["layoutChanged"] = false;
 		state["error"] = null;
+		state["openUrl"] = null;
 		return result;
 	};
 
@@ -793,6 +802,92 @@ function createHitContext() {
 		return JSON.stringify(names);
 	};
 
+	// Search: find selects the next or previous match (from the cursor); the state has the
+	// number of matches, the current one (0-based, -1 for none) and, after replace all,
+	// how many were replaced
+	var search = null;
+	api.asc_registerCallback("asc_onSetSearchCurrent", function (index, count) {
+		if (search) {
+			search["current"] = index;
+			search["count"] = count;
+		}
+	});
+	api.asc_registerCallback("asc_onReplaceAll", function (overall, replaced) {
+		if (search)
+			search["replaced"] = replaced;
+	});
+	function searchSettings(text, matchCase, wholeWords) {
+		var settings = new AscCommon.CSearchSettings();
+		settings.put_Text(text);
+		settings.put_MatchCase(matchCase);
+		settings.put_WholeWords(wholeWords);
+		return settings;
+	}
+	engine["find"] = function (text, matchCase, wholeWords, forward) {
+		search = { "count": 0, "current": -1, "replaced": -1 };
+		search["count"] = api.asc_findText(searchSettings(text, matchCase, wholeWords), forward) || 0;
+		if (!search["count"])
+			search["current"] = -1;
+		state["search"] = search;
+	};
+	// Replaces the current match and goes to the next one, or replaces all
+	engine["replace"] = function (text, replacement, matchCase, wholeWords, all) {
+		var settings = searchSettings(text, matchCase, wholeWords);
+		if (!search)
+			engine["find"](text, matchCase, wholeWords, true);
+		search["replaced"] = -1;
+		api.asc_replaceText(settings, replacement, all);
+		// The matches after replacing
+		var searchEngine = logicDocument.SearchEngine;
+		search["count"] = all ? 0 : searchEngine.Count;
+		search["current"] = all || !searchEngine.Count ? -1 : searchEngine.GetElementIndexById(searchEngine.CurId);
+		allPagesChanged();
+		state["search"] = search;
+	};
+	engine["endFind"] = function () {
+		api.asc_endFindText();
+		search = null;
+		state["search"] = null;
+	};
+
+	// The hyperlink at the cursor ({url, anchor}) or null
+	function linkAtCursor() {
+		if (logicDocument.IsSelectionUse && logicDocument.IsSelectionUse())
+			return null;
+		var elements = api.getSelectedElements() || [];
+		for (var i = 0; i < elements.length; i++) {
+			if (elements[i].get_ObjectType() !== Asc.c_oAscTypeSelectElement.Hyperlink)
+				continue;
+			var link = elements[i].get_ObjectValue();
+			return {
+				"url": link.get_Value() || "",
+				"anchor": (link.get_Bookmark && link.get_Bookmark()) || (link.is_TopOfDocument && link.is_TopOfDocument() ? "_top" : "")
+			};
+		}
+		return null;
+	}
+	// Links within the document (bookmarks, slides) are followed here; web addresses come
+	// back in the state as openUrl
+	api.asc_registerCallback("asc_onHyperlinkClick", function (url) {
+		state["openUrl"] = url;
+	});
+	engine["followLink"] = function () {
+		var link = linkAtCursor();
+		if (!link)
+			return;
+		if (!isPresentation && !link["url"]) {
+			// A place in the document: the cursor goes to it
+			if (link["anchor"] === "_top")
+				logicDocument.MoveCursorToStartOfDocument();
+			else
+				logicDocument.GoToBookmark(link["anchor"], false);
+			logicDocument.Document_UpdateSelectionState();
+		} else {
+			api.sync_HyperlinkClickCallback(link["url"] + (link["anchor"] && !isPresentation ? "#" + link["anchor"] : ""));
+		}
+		allPagesChanged();
+	};
+
 	// Toolbar commands
 	engine["setBold"] = function (value) { api.put_TextPrBold(value); };
 	engine["setItalic"] = function (value) { api.put_TextPrItalic(value); };
@@ -1061,13 +1156,87 @@ function spreadsheetEngine(window, api) {
 				"CanUndo": api.asc_getCanUndo(),
 				"CanRedo": api.asc_getCanRedo()
 			},
-			"sheet": sheet
+			"sheet": sheet,
+			"search": search,
+			"link": cellLink(),
+			"openUrl": openUrl
 		};
 		changed = false;
 		geometryChanged = false;
 		lastError = null;
+		openUrl = null;
 		return JSON.stringify(state);
 	};
+
+	// Search in all sheets: find selects the next or previous matching cell
+	var search = null;
+	api.asc_registerCallback("asc_onSetSearchCurrent", function (index, count) {
+		if (search) {
+			search["current"] = index;
+			search["count"] = count;
+		}
+	});
+	api.asc_registerCallback("asc_onRenameCellTextEnd", function (found, replaced) {
+		if (search)
+			search["replaced"] = replaced;
+	});
+	function findOptions(text, matchCase, wholeCell, forward) {
+		var options = new Asc.asc_CFindOptions();
+		options.asc_setFindWhat(text);
+		options.asc_setIsMatchCase(matchCase);
+		options.asc_setIsWholeCell(wholeCell);
+		options.asc_setScanForward(forward);
+		options.asc_setScanOnOnlySheet(Asc.c_oAscSearchBy.Workbook);
+		return options;
+	}
+	engine["find"] = edit(function (text, matchCase, wholeCell, forward) {
+		search = { "count": 0, "current": -1, "replaced": -1 };
+		// The result is the active cell's position here (NATIVE_EDITOR_ENJINE); the count is in the search engine
+		api.asc_findText(findOptions(text, matchCase, wholeCell, forward));
+		search["count"] = api.wb.SearchEngine.Count;
+		if (!search["count"])
+			search["current"] = -1;
+	});
+	// Replaces the current match and goes to the next one, or replaces all
+	engine["replace"] = edit(function (text, replacement, matchCase, wholeCell, all) {
+		if (!search)
+			engine["find"](text, matchCase, wholeCell, true);
+		var options = findOptions(text, matchCase, wholeCell, true);
+		options.asc_setReplaceWith(replacement);
+		options.asc_setIsReplaceAll(all);
+		search["replaced"] = -1;
+		api.asc_replaceText(options);
+		if (all) {
+			search["count"] = 0;
+			search["current"] = -1;
+		} else {
+			engine["find"](text, matchCase, wholeCell, true);
+		}
+	});
+	engine["endFind"] = function () {
+		// asc_endFindText calls a workbook method that doesn't exist (sdkjs)
+		api.wb.SearchEngine.Clear();
+		search = null;
+	};
+
+	// The hyperlink in the active cell ({url, anchor}: a web address or a cell range)
+	function cellLink() {
+		var link = api.asc_getCellInfo().asc_getHyperlink();
+		if (!link)
+			return null;
+		var isRange = link.asc_getType() === Asc.c_oAscHyperlinkType.RangeLink;
+		return { "url": isRange ? "" : (link.asc_getHyperlinkUrl() || ""), "anchor": isRange ? (link.asc_getLocation() || "") : "" };
+	}
+	var openUrl = null;
+	engine["followLink"] = edit(function () {
+		var link = api.asc_getCellInfo().asc_getHyperlink();
+		if (!link)
+			return;
+		if (link.asc_getType() === Asc.c_oAscHyperlinkType.RangeLink)
+			api.asc_setWorksheetRange(link);
+		else
+			openUrl = link.asc_getHyperlinkUrl();
+	});
 
 	engine["reportError"] = function (e) {
 		lastError = String(e) + (e && e.stack ? "\n" + e.stack : "");

@@ -7,6 +7,7 @@
 #include "PdfFile/PdfFile.h"
 #include "XpsFile/XpsFile.h"
 
+#include <cmath>
 #include <cstring>
 
 namespace eo
@@ -38,6 +39,202 @@ namespace eo
 			if (read >= 4 && header[0] == 'P' && header[1] == 'K')
 				return Format::Xps;
 			return Format::Unknown;
+		}
+
+		// Collects the characters a file draws, in page mm from the top left (a renderer
+		// that draws nothing else)
+		class TextCollector : public IRenderer
+		{
+		public:
+			struct Glyph
+			{
+				std::u16string text;
+				// Baseline start and end, and the font height
+				double x1, y1, x2, y2, size;
+			};
+			std::vector<Glyph> glyphs;
+
+			TextCollector(double widthMm, double heightMm) : m_width(widthMm), m_height(heightMm) {}
+
+			HRESULT get_Type(LONG* type) override { *type = c_nHtmlRendrererText; return S_OK; }
+			HRESULT NewPage() override { return S_OK; }
+			HRESULT get_Height(double* height) override { *height = m_height; return S_OK; }
+			HRESULT put_Height(const double& height) override { m_height = height; return S_OK; }
+			HRESULT get_Width(double* width) override { *width = m_width; return S_OK; }
+			HRESULT put_Width(const double& width) override { m_width = width; return S_OK; }
+			HRESULT get_DpiX(double* dpi) override { *dpi = 96; return S_OK; }
+			HRESULT get_DpiY(double* dpi) override { *dpi = 96; return S_OK; }
+			HRESULT get_FontSize(double* size) override { *size = m_fontSize; return S_OK; }
+			HRESULT put_FontSize(const double& size) override { m_fontSize = size; return S_OK; }
+
+			HRESULT CommandDrawTextCHAR(const LONG& c, const double& x, const double& y, const double& w, const double& h) override
+			{
+				Add(std::wstring(1, (wchar_t)c), x, y, w);
+				return S_OK;
+			}
+			HRESULT CommandDrawText(const std::wstring& text, const double& x, const double& y, const double& w, const double& h) override
+			{
+				Add(text, x, y, w);
+				return S_OK;
+			}
+			HRESULT CommandDrawTextExCHAR(const LONG& c, const LONG& gid, const double& x, const double& y, const double& w, const double& h) override
+			{
+				Add(std::wstring(1, (wchar_t)c), x, y, w);
+				return S_OK;
+			}
+			HRESULT CommandDrawTextEx(const std::wstring& text, const unsigned int* gids, const unsigned int gidsCount, const double& x, const double& y, const double& w, const double& h) override
+			{
+				Add(text, x, y, w);
+				return S_OK;
+			}
+
+			HRESULT SetTransform(const double& m1, const double& m2, const double& m3, const double& m4, const double& m5, const double& m6) override
+			{
+				m_matrix[0] = m1; m_matrix[1] = m2; m_matrix[2] = m3; m_matrix[3] = m4; m_matrix[4] = m5; m_matrix[5] = m6;
+				return S_OK;
+			}
+			HRESULT GetTransform(double* a, double* b, double* c, double* d, double* e, double* f) override
+			{
+				*a = m_matrix[0]; *b = m_matrix[1]; *c = m_matrix[2]; *d = m_matrix[3]; *e = m_matrix[4]; *f = m_matrix[5];
+				return S_OK;
+			}
+			HRESULT ResetTransform() override
+			{
+				SetTransform(1, 0, 0, 1, 0, 0);
+				return S_OK;
+			}
+
+			// Nothing else is collected
+			HRESULT get_PenColor(LONG* lColor) override { *lColor = 0; return S_OK; }
+			HRESULT put_PenColor(const LONG& lColor) override { return S_OK; }
+			HRESULT get_PenAlpha(LONG* lAlpha) override { *lAlpha = 0; return S_OK; }
+			HRESULT put_PenAlpha(const LONG& lAlpha) override { return S_OK; }
+			HRESULT get_PenSize(double* dSize) override { *dSize = 0; return S_OK; }
+			HRESULT put_PenSize(const double& dSize) override { return S_OK; }
+			HRESULT get_PenDashStyle(BYTE* val) override { *val = 0; return S_OK; }
+			HRESULT put_PenDashStyle(const BYTE& val) override { return S_OK; }
+			HRESULT get_PenLineStartCap(BYTE* val) override { *val = 0; return S_OK; }
+			HRESULT put_PenLineStartCap(const BYTE& val) override { return S_OK; }
+			HRESULT get_PenLineEndCap(BYTE* val) override { *val = 0; return S_OK; }
+			HRESULT put_PenLineEndCap(const BYTE& val) override { return S_OK; }
+			HRESULT get_PenLineJoin(BYTE* val) override { *val = 0; return S_OK; }
+			HRESULT put_PenLineJoin(const BYTE& val) override { return S_OK; }
+			HRESULT get_PenDashOffset(double* dOffset) override { *dOffset = 0; return S_OK; }
+			HRESULT put_PenDashOffset(const double& dOffset) override { return S_OK; }
+			HRESULT get_PenAlign(LONG* lAlign) override { *lAlign = 0; return S_OK; }
+			HRESULT put_PenAlign(const LONG& lAlign) override { return S_OK; }
+			HRESULT get_PenMiterLimit(double* dOffset) override { *dOffset = 0; return S_OK; }
+			HRESULT put_PenMiterLimit(const double& dOffset) override { return S_OK; }
+			HRESULT PenDashPattern(double* pPattern, LONG lCount) override { return S_OK; }
+			HRESULT get_BrushType(LONG* lType) override { *lType = 0; return S_OK; }
+			HRESULT put_BrushType(const LONG& lType) override { return S_OK; }
+			HRESULT get_BrushColor1(LONG* lColor) override { *lColor = 0; return S_OK; }
+			HRESULT put_BrushColor1(const LONG& lColor) override { return S_OK; }
+			HRESULT get_BrushAlpha1(LONG* lAlpha) override { *lAlpha = 0; return S_OK; }
+			HRESULT put_BrushAlpha1(const LONG& lAlpha) override { return S_OK; }
+			HRESULT get_BrushColor2(LONG* lColor) override { *lColor = 0; return S_OK; }
+			HRESULT put_BrushColor2(const LONG& lColor) override { return S_OK; }
+			HRESULT get_BrushAlpha2(LONG* lAlpha) override { *lAlpha = 0; return S_OK; }
+			HRESULT put_BrushAlpha2(const LONG& lAlpha) override { return S_OK; }
+			HRESULT get_BrushTexturePath(std::wstring* bsPath) override { bsPath->clear(); return S_OK; }
+			HRESULT put_BrushTexturePath(const std::wstring& bsPath) override { return S_OK; }
+			HRESULT get_BrushTextureImage(Aggplus::CImage** pImage) override { *pImage = nullptr; return S_OK; }
+			HRESULT put_BrushTextureImage(Aggplus::CImage* pImage) override { return S_OK; }
+			HRESULT get_BrushTextureMode(LONG* lMode) override { *lMode = 0; return S_OK; }
+			HRESULT put_BrushTextureMode(const LONG& lMode) override { return S_OK; }
+			HRESULT get_BrushTextureAlpha(LONG* lTxAlpha) override { *lTxAlpha = 0; return S_OK; }
+			HRESULT put_BrushTextureAlpha(const LONG& lTxAlpha) override { return S_OK; }
+			HRESULT get_BrushTransform(Aggplus::CMatrix& oMatrix) override { return S_OK; }
+			HRESULT put_BrushTransform(const Aggplus::CMatrix& oMatrix) override { return S_OK; }
+			HRESULT get_BrushLinearAngle(double* dAngle) override { *dAngle = 0; return S_OK; }
+			HRESULT put_BrushLinearAngle(const double& dAngle) override { return S_OK; }
+			HRESULT BrushRect(const INT& val, const double& left, const double& top, const double& width, const double& height) override { return S_OK; }
+			HRESULT BrushBounds(const double& left, const double& top, const double& width, const double& height) override { return S_OK; }
+			HRESULT put_BrushGradientColors(LONG* lColors, double* pPositions, LONG nCount) override { return S_OK; }
+			HRESULT get_FontName(std::wstring* bsName) override { bsName->clear(); return S_OK; }
+			HRESULT put_FontName(const std::wstring& bsName) override { return S_OK; }
+			HRESULT get_FontPath(std::wstring* bsName) override { bsName->clear(); return S_OK; }
+			HRESULT put_FontPath(const std::wstring& bsName) override { return S_OK; }
+			HRESULT get_FontStyle(LONG* lStyle) override { *lStyle = 0; return S_OK; }
+			HRESULT put_FontStyle(const LONG& lStyle) override { return S_OK; }
+			HRESULT get_FontStringGID(INT* bGID) override { *bGID = 0; return S_OK; }
+			HRESULT put_FontStringGID(const INT& bGID) override { return S_OK; }
+			HRESULT get_FontCharSpace(double* dSpace) override { *dSpace = 0; return S_OK; }
+			HRESULT put_FontCharSpace(const double& dSpace) override { return S_OK; }
+			HRESULT get_FontFaceIndex(int* lFaceIndex) override { *lFaceIndex = 0; return S_OK; }
+			HRESULT put_FontFaceIndex(const int& lFaceIndex) override { return S_OK; }
+			HRESULT BeginCommand(const DWORD& lType) override { return S_OK; }
+			HRESULT EndCommand(const DWORD& lType) override { return S_OK; }
+			HRESULT PathCommandMoveTo(const double& x, const double& y) override { return S_OK; }
+			HRESULT PathCommandLineTo(const double& x, const double& y) override { return S_OK; }
+			HRESULT PathCommandLinesTo(double* points, const int& count) override { return S_OK; }
+			HRESULT PathCommandCurveTo(const double& x1, const double& y1, const double& x2, const double& y2, const double& x3, const double& y3) override { return S_OK; }
+			HRESULT PathCommandCurvesTo(double* points, const int& count) override { return S_OK; }
+			HRESULT PathCommandArcTo(const double& x, const double& y, const double& w, const double& h, const double& startAngle, const double& sweepAngle) override { return S_OK; }
+			HRESULT PathCommandClose() override { return S_OK; }
+			HRESULT PathCommandEnd() override { return S_OK; }
+			HRESULT DrawPath(const LONG& nType) override { return S_OK; }
+			HRESULT PathCommandStart() override { return S_OK; }
+			HRESULT PathCommandGetCurrentPoint(double* x, double* y) override { return S_OK; }
+			HRESULT PathCommandTextCHAR(const LONG& c, const double& x, const double& y, const double& w, const double& h) override { return S_OK; }
+			HRESULT PathCommandText(const std::wstring& bsText, const double& x, const double& y, const double& w, const double& h) override { return S_OK; }
+			HRESULT PathCommandTextExCHAR(const LONG& c, const LONG& gid, const double& x, const double& y, const double& w, const double& h) override { return S_OK; }
+			HRESULT PathCommandTextEx(const std::wstring& sText, const unsigned int* pGids, const unsigned int nGidsCount, const double& x, const double& y, const double& w, const double& h) override { return S_OK; }
+			HRESULT DrawImage(IGrObject* pImage, const double& x, const double& y, const double& w, const double& h) override { return S_OK; }
+			HRESULT DrawImageFromFile(const std::wstring&, const double& x, const double& y, const double& w, const double& h, const BYTE& lAlpha) override { return S_OK; }
+			HRESULT get_ClipMode(LONG* plMode) override { *plMode = 0; return S_OK; }
+			HRESULT put_ClipMode(const LONG& lMode) override { return S_OK; }
+			HRESULT CommandLong(const LONG& lType, const LONG& lCommand) override { return S_OK; }
+			HRESULT CommandDouble(const LONG& lType, const double& dCommand) override { return S_OK; }
+			HRESULT CommandString(const LONG& lType, const std::wstring& sCommand) override { return S_OK; }
+
+		private:
+			double m_width, m_height;
+			double m_fontSize = 10;
+			double m_matrix[6] = { 1, 0, 0, 1, 0, 0 };
+
+			void Add(const std::wstring& text, double x, double y, double width)
+			{
+				if (text.empty() || (text.size() == 1 && (text[0] == 0 || text[0] == 0xFFFF)))
+					return;
+				const double* m = m_matrix;
+				Glyph glyph;
+				for (wchar_t c : text)
+				{
+					// UTF-32 (wchar_t on Linux and Android) to UTF-16
+					if (c >= 0x10000)
+					{
+						glyph.text += (char16_t)(0xD800 + ((c - 0x10000) >> 10));
+						glyph.text += (char16_t)(0xDC00 + ((c - 0x10000) & 0x3FF));
+					}
+					else
+					{
+						glyph.text += (char16_t)c;
+					}
+				}
+				glyph.x1 = m[0] * x + m[2] * y + m[4];
+				glyph.y1 = m[1] * x + m[3] * y + m[5];
+				glyph.x2 = m[0] * (x + width) + m[2] * y + m[4];
+				glyph.y2 = m[1] * (x + width) + m[3] * y + m[5];
+				// Points to mm, scaled as the text's vertical axis
+				glyph.size = m_fontSize * 25.4 / 72 * std::sqrt(m[2] * m[2] + m[3] * m[3]);
+				glyphs.push_back(glyph);
+			}
+		};
+
+		void Append(PageText& page, const std::u16string& text, float left, float top, float right, float bottom)
+		{
+			page.text += text;
+			for (size_t i = 0; i < text.size(); ++i)
+				page.boxes.insert(page.boxes.end(), { left, top, right, bottom });
+		}
+
+		unsigned int ReadInt(const BYTE*& data)
+		{
+			unsigned int value;
+			memcpy(&value, data, 4);
+			data += 4;
+			return value;
 		}
 	}
 
@@ -157,5 +354,83 @@ namespace eo
 		// The pixels belong to the caller
 		frame.put_Data(nullptr);
 		return true;
+	}
+
+	PageText DrawingDocument::GetPageText(int page)
+	{
+		PageText result;
+		if (!m_private->file || page < 0 || page >= GetPageCount())
+			return result;
+		PageSize size = GetPageSize(page);
+		TextCollector collector(size.widthMm, size.heightMm);
+		bool stop = false;
+		m_private->file->DrawPageOnRenderer(&collector, page, &stop);
+
+		// Characters in drawing order; a jump back or to another line starts a new line, a gap
+		// a new word
+		const std::vector<TextCollector::Glyph>& glyphs = collector.glyphs;
+		for (size_t i = 0; i < glyphs.size(); ++i)
+		{
+			const TextCollector::Glyph& glyph = glyphs[i];
+			double left = std::min(glyph.x1, glyph.x2);
+			double right = std::max(glyph.x1, glyph.x2);
+			// Without a width (XPS), up to the next character on the line
+			if (right - left < 0.01)
+			{
+				right = left + glyph.size * 0.5;
+				if (i + 1 < glyphs.size() && std::fabs(glyphs[i + 1].y1 - glyph.y1) < glyph.size * 0.3 &&
+				    glyphs[i + 1].x1 > left && glyphs[i + 1].x1 < left + glyph.size * 2)
+					right = glyphs[i + 1].x1;
+			}
+			if (i > 0)
+			{
+				const TextCollector::Glyph& previous = glyphs[i - 1];
+				float lastRight = result.boxes.empty() ? (float)left : result.boxes[result.boxes.size() - 2];
+				float lastTop = result.boxes.empty() ? 0 : result.boxes[result.boxes.size() - 3];
+				float lastBottom = result.boxes.empty() ? 0 : result.boxes[result.boxes.size() - 1];
+				double lineHeight = std::max(glyph.size, previous.size);
+				if (std::fabs(glyph.y1 - previous.y1) > lineHeight * 0.5 || left < lastRight - lineHeight)
+					Append(result, u"\n", lastRight, lastTop, lastRight, lastBottom);
+				else if (left - lastRight > lineHeight * 0.2 && glyph.text != u" " && previous.text != u" ")
+					Append(result, u" ", lastRight, lastTop, (float)left, lastBottom);
+			}
+			Append(result, glyph.text, (float)left, (float)(glyph.y1 - glyph.size * 0.8),
+			       (float)right, (float)(glyph.y1 + glyph.size * 0.2));
+		}
+		return result;
+	}
+
+	std::vector<PageLink> DrawingDocument::GetLinks(int page)
+	{
+		std::vector<PageLink> result;
+		if (m_private->format != Format::Pdf || page < 0 || page >= GetPageCount())
+			return result;
+		BYTE* data = m_private->file->GetLinks(page);
+		if (!data)
+			return result;
+		// NSWasm::CPageLink: the length, then per link the URL (length and UTF-8), the
+		// destination and the area, as hundredths of points from the top left
+		const BYTE* current = data;
+		const BYTE* end = data + ReadInt(current);
+		while (current + 4 <= end)
+		{
+			PageLink link;
+			unsigned int length = ReadInt(current);
+			if (current + length + 20 > end)
+				break;
+			// Web addresses are ASCII; anything else would not be valid UTF-8 for Java
+			for (unsigned int i = 0; i < length; ++i)
+				link.url += current[i] < 0x80 && current[i] >= 0x20 ? (char)current[i] : '?';
+			current += length;
+			ReadInt(current);
+			const float mmPerUnit = 25.4f / 72 / 100;
+			link.x = (int)ReadInt(current) * mmPerUnit;
+			link.y = (int)ReadInt(current) * mmPerUnit;
+			link.width = (int)ReadInt(current) * mmPerUnit;
+			link.height = (int)ReadInt(current) * mmPerUnit;
+			result.push_back(link);
+		}
+		free(data);
+		return result;
 	}
 }
