@@ -5,6 +5,10 @@
 // slides of a presentation (see the editor adapters below).
 (function (window) {
 	var api = window["Asc"]["editor"];
+	if (api.editorId === AscCommon.c_oEditorId.Spreadsheet) {
+		spreadsheetEngine(window, api);
+		return;
+	}
 	var logicDocument = api.WordControl.m_oLogicDocument;
 	var drawingDocument = api.WordControl.m_oDrawingDocument;
 	var native = window["native"];
@@ -506,3 +510,100 @@
 	engine["getCurrentSlide"] = function () { return isPresentation ? logicDocument.CurPage : -1; };
 	engine["redo"] = function () { api.Redo(); };
 })(window);
+
+// Spreadsheets (spike): page 0 is the used range of the active sheet. Tiles are drawn by the
+// print path (WorksheetView.drawForPrint), with a print page made of the cells under the tile.
+function spreadsheetEngine(window, api) {
+	var native = window["native"];
+	var engine = window["eoEngine"] = {};
+	var PX_TO_MM = 25.4 / 96;
+
+	api.asc_SetSilentMode(false);
+	AscCommon.History.TurnOnChanges();
+	// Calculates the view: column widths, row heights, charts and other drawings
+	api.asc_nativeCalculateFile();
+
+	var resources = {
+		"isResourcesObject": true,
+		"fontsDirectory": native["GetFontsDirectory"](),
+		"imagesDirectory": native["GetImagesPath"]()
+	};
+
+	function sheetView() {
+		return api.wb.getWorksheet();
+	}
+
+	// Columns and rows with content, at least a screenful
+	function usedRange() {
+		var model = sheetView().model;
+		return new Asc.Range(0, 0, Math.max(model.getColsCount(), 10) - 1, Math.max(model.getRowsCount(), 30) - 1);
+	}
+
+	function colLeft(view, col) { return view._getColLeft(col) - view._getColLeft(0); }
+	function rowTop(view, row) { return view._getRowTop(row) - view._getRowTop(0); }
+
+	engine["tile"] = null;
+	engine["getPageCount"] = function () { return 1; };
+	engine["getPageWidth"] = function () {
+		var view = sheetView();
+		return colLeft(view, usedRange().c2 + 1) * PX_TO_MM;
+	};
+	engine["getPageHeight"] = function () {
+		var view = sheetView();
+		return rowTop(view, usedRange().r2 + 1) * PX_TO_MM;
+	};
+	engine["beginTile"] = function () {
+		engine["tile"] = new AscCommon.CNativeGraphics();
+	};
+
+	engine["drawTile"] = function (page, pageWidth, pageHeight, x, y, width, height) {
+		var view = sheetView();
+		var mmPerPixel = engine["getPageWidth"]() / pageWidth;
+		var g = engine["tile"];
+		g.width = width;
+		g.height = height;
+		g.create(resources, width, height, width * mmPerPixel, height * mmPerPixel);
+		g.CoordTransformOffset(-x, -y);
+		g.transform(1, 0, 0, 1, 0, 0);
+		g.b_color1(255, 255, 255, 255);
+		g._s(); g._m(0, 0); g._l(engine["getPageWidth"](), 0); g._l(engine["getPageWidth"](), engine["getPageHeight"]()); g._l(0, engine["getPageHeight"]()); g._z(); g.df();
+
+		// The cells under the tile, as a print page starting at the tile's first cell
+		var left = x * mmPerPixel / PX_TO_MM, top = y * mmPerPixel / PX_TO_MM;
+		var right = (x + width) * mmPerPixel / PX_TO_MM, bottom = (y + height) * mmPerPixel / PX_TO_MM;
+		var range = usedRange();
+		var c1 = 0, r1 = 0, c2 = range.c2, r2 = range.r2;
+		while (c1 < range.c2 && colLeft(view, c1 + 1) <= left) ++c1;
+		while (r1 < range.r2 && rowTop(view, r1 + 1) <= top) ++r1;
+		c2 = c1; while (c2 < range.c2 && colLeft(view, c2 + 1) < right) ++c2;
+		r2 = r1; while (r2 < range.r2 && rowTop(view, r2 + 1) < bottom) ++r2;
+
+		var pageData = new AscCommonExcel.CPagePrint();
+		pageData.pageRange = new Asc.Range(c1, r1, c2, r2);
+		pageData.pageWidth = (colLeft(view, c2 + 1) - colLeft(view, c1)) * PX_TO_MM;
+		pageData.pageHeight = (rowTop(view, r2 + 1) - rowTop(view, r1)) * PX_TO_MM;
+		pageData.pageClipRectLeft = 0;
+		pageData.pageClipRectTop = 0;
+		pageData.pageClipRectWidth = colLeft(view, c2 + 1) - colLeft(view, c1);
+		pageData.pageClipRectHeight = rowTop(view, r2 + 1) - rowTop(view, r1);
+		pageData.pageGridLines = true;
+		pageData.scale = 1;
+		pageData.indexWorksheet = api.wbModel.getActive();
+
+		// Print pages start at the page's origin: move it to the first cell
+		g.transform(1, 0, 0, 1, colLeft(view, c1) * PX_TO_MM, rowTop(view, r1) * PX_TO_MM);
+		g.BeginPage = g.EndPage = function () {};
+		var printer = new AscCommonExcel.CPdfPrinter(api.wb.fmgrGraphics[3], api.wb.m_oFont.clone());
+		printer.DocumentRenderer = g;
+		view.drawForPrint(printer, pageData, 0, [pageData]);
+
+		g.Native["Destroy"]();
+		engine["tile"] = null;
+	};
+
+	engine["getState"] = function () {
+		return JSON.stringify({ "cursor": null, "selection": [], "drawings": [], "dirtyPages": {}, "layoutChanged": false,
+			"layoutPending": false, "currentPage": -1, "modified": api.asc_isDocumentModified ? api.asc_isDocumentModified() : false,
+			"error": null, "interface": {} });
+	};
+}

@@ -62,3 +62,24 @@ Opening, after the first start (which unpacks the runtime and indexes the fonts,
 
 - **Loading sdkjs** uses V8's code cache (`sdkjs/word/sdk-all.cache`, written by doctrenderer on the first start): 2.0 s without it, 0.5–0.6 s with it on the emulator.
 - **V8 startup snapshot** (doctrenderer's `sdk-all.bin`, the role of ONLYOFFICE's `libbootstrap`): tried and left out. It has to be created on the device (it belongs to the V8 build), takes 1.3 s and 6.8 MB, and saved only 50–70 ms per open over the code cache: most of the remaining time is sdkjs reading the document and compiling functions on first use, which neither covers. A damaged snapshot file would also crash V8 on every start.
+
+## Spreadsheets (spike, step 5)
+
+**Question:** can the spreadsheet editor draw a sheet and be edited without a browser, so that it fits the same engine and tile renderer as documents and presentations?
+
+**Answer: yes.** `engine.js` has a spike adapter (`spreadsheetEngine`): page 0 is the used range of the active sheet. The app doesn't use it yet (`CellsActivity` is still the placeholder).
+
+| Check | Result (desktop, `sample.xlsx`: 175 columns × 689 rows of formats) |
+|---|---|
+| Draw | `WorksheetView.drawForPrint` with a print page (`CPagePrint`) made of the cells under a tile, into the tile's `CNativeGraphics` (`CPdfPrinter.DocumentRenderer`). Values, number formats, fills, borders, pivot tables, charts and slicers render; grid lines optional. Whole sheet at 7633 × 8074 px: 0.6 s; 256 px tiles: 7.5 ms each on average. |
+| Charts | Need `asc_nativeCalculateFile()` after opening (prepares the drawing objects). |
+| Edit a cell | `WorksheetView._saveCellValueAfterEdit(range, [Fragment])`, the cell editor's commit, works without the DOM: a new fee recalculates the `SUMIF` total ($1,005,230 → $1,050,730), formulas work (`=F15*2`), undo restores both. |
+| Format | `asc_setCellBold` etc. on the selection set with `WorksheetView.setSelection`. |
+| Not usable | The web cell editor (`asc_enterText` → `CellEditor`) and the events controller depend on the DOM set up by the web editor. |
+
+**Design for the cells editor:**
+- The sheet is one large page; tiles draw the cells under them through the print path (as above). Several sheets are pages or a sheet switcher.
+- Taps map to cells with the column and row positions (`_getColLeft`, `_getRowTop`); the app draws the selection and its handles itself.
+- Editing a cell happens in a native text field (in place or as a formula bar) and is committed with `_saveCellValueAfterEdit`; the toolbar commands (`asc_setCellBold`, ...) act on the selection.
+- Frozen panes and row/column headings are drawn by the app from the same positions.
+
