@@ -128,20 +128,27 @@
 		cursorVisible = false;
 		updateCursor();
 	});
-	wrap("SelectClear", function () {
-		state["selection"] = [];
-	});
-	wrap("SelectEnabled", function (enabled) {
-		if (!enabled)
-			state["selection"] = [];
-	});
-	wrap("AddPageSelection", function (page, x, y, w, h) {
+	// The web editor draws the selection on its overlay canvas (OnUpdateOverlay), which the
+	// engine doesn't have: the selection is collected from the document in getState() instead
+	drawingDocument["AddPageSelection"] = function (page, x, y, w, h) {
 		var points = [];
 		[[x, y], [x + w, y], [x + w, y + h], [x, y + h]].forEach(function (corner) {
 			points = points.concat(transformPoint(corner[0], corner[1]));
 		});
 		state["selection"].push({ "page": page, "points": points });
-	});
+	};
+
+	function updateSelection() {
+		state["selection"] = [];
+		if (!logicDocument.IsSelectionUse() || logicDocument.IsSelectionEmpty())
+			return;
+		// Text in shapes sets its transform while drawing; the cursor keeps its own
+		var textMatrix = drawingDocument.TextMatrix;
+		for (var page = 0; page < drawingDocument.m_lPagesCount; ++page)
+			logicDocument.DrawSelectionOnPage(page);
+		drawingDocument.TextMatrix = textMatrix;
+	}
+
 	wrap("OnRecalculatePage", function (page) {
 		state["dirtyPages"][page] = true;
 		state["layoutChanged"] = true;
@@ -170,6 +177,7 @@
 
 	// State as JSON; pages to draw again and layout changes are reported once
 	engine["getState"] = function () {
+		updateSelection();
 		var result = JSON.stringify(state);
 		state["dirtyPages"] = {};
 		state["layoutChanged"] = false;
@@ -193,6 +201,24 @@
 			e.Type = AscCommon.g_mouse_event_type_up;
 			logicDocument.OnMouseUp(e, x, y, page);
 		}
+	};
+
+	// Selects from the start to the end point (page coordinates, mm): selection handles.
+	// The old selection goes first, so pressing on it doesn't start dragging its text.
+	engine["select"] = function (startPage, startX, startY, endPage, endX, endY) {
+		engine["finishComposingText"]();
+		logicDocument.RemoveSelection();
+		var e = new AscCommon.CMouseEventHandler();
+		e.Button = 0;
+		e.ClickCount = 1;
+		e.Type = AscCommon.g_mouse_event_type_down;
+		logicDocument.OnMouseDown(e, startX, startY, startPage);
+		e.Type = AscCommon.g_mouse_event_type_move;
+		e.IsPressed = true;
+		logicDocument.OnMouseMove(e, endX, endY, endPage);
+		e.Type = AscCommon.g_mouse_event_type_up;
+		e.IsPressed = false;
+		logicDocument.OnMouseUp(e, endX, endY, endPage);
 	};
 
 	// Keys with web key codes (8 backspace, 13 enter, 37-40 arrows, 46 delete, ...)
@@ -242,6 +268,47 @@
 		} else {
 			api.asc_enterText(text);
 		}
+	};
+
+	// Clipboard. Copy returns the selection as plain text (for other apps) and in sdkjs'
+	// internal format (keeps formatting when pasting into a document), as JSON.
+	var clipboardFormat = AscCommon.c_oAscClipboardDataFormat;
+
+	// The web editor initializes the paste helper with its clipboard; without it, pastes
+	// never end (the document's action stays open)
+	AscCommon.g_specialPasteHelper.Init(api);
+
+	engine["copy"] = function () {
+		var data = {};
+		api.asc_CheckCopy({
+			"pushData": function (format, value) {
+				data[format] = value;
+			}
+		}, clipboardFormat.Text | clipboardFormat.Internal);
+		// The native engine copies the internal format as {sBase64, text, drawingUrls}
+		var internal = data[clipboardFormat.Internal];
+		return JSON.stringify({
+			"text": data[clipboardFormat.Text] || "",
+			"internal": (internal && internal.sBase64) || ""
+		});
+	};
+
+	engine["cut"] = function () {
+		api.asc_SelectionCut();
+	};
+
+	// Pastes the internal format if given, plain text otherwise
+	engine["paste"] = function (text, internal) {
+		engine["finishComposingText"]();
+		if (internal)
+			api.asc_PasteData(clipboardFormat.Internal, internal);
+		else
+			api.asc_PasteData(clipboardFormat.Text, text);
+	};
+
+	engine["selectAll"] = function () {
+		engine["finishComposingText"]();
+		logicDocument.SelectAll();
 	};
 
 	// Toolbar commands
