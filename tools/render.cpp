@@ -6,6 +6,9 @@
 // Scripts run in sdkjs after opening (e.g. editing commands from engine.js); their
 // results are printed. Other paths save the document there. PDF, XPS and DjVu files are
 // drawn by core's readers instead (password in EO_PASSWORD).
+//
+// With EO_REPL=1, eo-render then reads JavaScript from stdin, one script per line, and prints
+// each result on a line starting with "@@" (for drivers such as the co-editing check).
 
 #include "../src/Document.h"
 #include "../src/DrawingDocument.h"
@@ -226,6 +229,21 @@ int main(int argc, char* argv[])
 			return 2;
 		}
 		std::cout << "open + layout: " << MillisecondsSince(start) << " ms" << std::endl;
+
+		if (const char* repl = getenv("EO_REPL"); repl && std::string(repl) == "1")
+		{
+			std::cout << "@@ready" << std::endl;
+			std::string line;
+			while (std::getline(std::cin, line))
+			{
+				if (line.empty())
+					continue;
+				std::cout << "@@" << document.Execute(ToWide(line)) << std::endl;
+			}
+			document.Close();
+			eo::Document::Dispose();
+			return 0;
+		}
 
 		for (int i = 5; i < argc; ++i)
 		{

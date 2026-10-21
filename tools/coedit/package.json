@@ -1,0 +1,12 @@
+{
+  "name": "eo-coedit-driver",
+  "private": true,
+  "description": "Drives the engine (eo-render, EO_REPL=1) in a co-editing session of a Document Server through Nextcloud",
+  "type": "module",
+  "dependencies": {
+    "socket.io-client": "4.8.1"
+  },
+  "devDependencies": {
+    "playwright": "^1.48.2"
+  }
+}

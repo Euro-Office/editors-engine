@@ -17,6 +17,19 @@ window["setTimeout"] = function (callback) {
 	return timer.id;
 };
 
+// sdkjs asks for styles of the page's elements here and there (co-editing); there are none
+if (typeof window["getComputedStyle"] !== "function") {
+	window["getComputedStyle"] = function () {
+		return { getPropertyValue: function () { return ""; } };
+	};
+}
+
+// Nor are there browser events to listen to
+if (typeof document !== "undefined" && typeof document["addEventListener"] !== "function") {
+	document["addEventListener"] = function () {};
+	document["removeEventListener"] = function () {};
+}
+
 window["clearTimeout"] = function (id) {
 	for (var i = 0; i < timers.length; ++i) {
 		if (timers[i].id === id) {
@@ -411,7 +424,217 @@ function chartCommands(engine, api, options) {
 	};
 }
 
-(function (window) {
+// Co-editing with a Document Server. sdkjs runs its own co-authoring client (DocsCoApi) on a
+// socket the app connects: window.io, which sdkjs takes as its socket.io client, queues what
+// sdkjs sends (coTakeOutbox) and gets what the server sends (coReceive). The app downloads the
+// files the server converted (Editor.bin) before passing its message on (coSetFile), because
+// sdkjs would load them over the web.
+//
+// Object ids must be the same as in the other editors of the session: changes name the objects
+// they change. docbuilder's load of a document gives the ids the web editors give, so the
+// server's version is loaded the same way, from the same id, and the engine starts again on it
+// (eoStartEngine). The session's state is kept across that (window.eoCoState).
+function coEditingCommands(engine, api) {
+	var co = window["eoCoState"] = window["eoCoState"] || { outbox: [], socket: null, files: {}, loading: false };
+
+	function EngineSocket(options) {
+		var self = this;
+		this.options = options;
+		this.events = {};
+		this.managerEvents = {};
+		this.io = {
+			opts: { transports: options["transports"] },
+			on: function (name, callback) { (self.managerEvents[name] = self.managerEvents[name] || []).push(callback); },
+			reconnectionAttempts: function () {},
+			reconnectionDelay: function () {},
+			reconnectionDelayMax: function () {},
+			setOpenToken: function (token) { options["auth"]["token"] = token; },
+			setSessionToken: function (token) { options["auth"]["session"] = token; }
+		};
+		co.outbox.push({ "type": "connect", "options": options });
+	}
+	EngineSocket.prototype.on = function (name, callback) {
+		(this.events[name] = this.events[name] || []).push(callback);
+	};
+	EngineSocket.prototype.emit = function (name, data) {
+		co.outbox.push({ "type": "emit", "name": name, "data": data });
+	};
+	EngineSocket.prototype.connect = function () {
+		co.outbox.push({ "type": "connect", "options": this.options });
+	};
+	EngineSocket.prototype.disconnect = function () {
+		co.outbox.push({ "type": "disconnect" });
+	};
+	EngineSocket.prototype.close = EngineSocket.prototype.disconnect;
+	EngineSocket.prototype.open = EngineSocket.prototype.connect;
+	EngineSocket.prototype.fire = function (events, name, args) {
+		(events[name] || []).forEach(function (callback) { callback.apply(null, args); });
+	};
+
+	window["io"] = function (options) {
+		co.socket = new EngineSocket(options);
+		return co.socket;
+	};
+
+	// The id docbuilder's load started with: the document object is its first new object
+	if (co.idStart === undefined && api.WordControl && api.WordControl.m_oLogicDocument)
+		co.idStart = Number(api.WordControl.m_oLogicDocument.Get_Id()) - 1;
+
+	// Loading a document sets up the web editor's text input element and touch scrolling; the
+	// app has its own
+	AscCommon.InitBrowserInputContext = function () {};
+	if (api.WordControl)
+		api.WordControl.initEventsMobile = function () {};
+
+	// docbuilder makes sdkjs hand its changes to docbuilder instead of the server
+	// (asc_nativeOpenFile): sdkjs' own versions again (common/docscoapi.js)
+	function sendChangesToServer() {
+		var coApi = AscCommon.CDocsCoApi.prototype;
+		coApi.askSaveChanges = function (callback) {
+			if (this._CoAuthoringApi && this._onlineWork) {
+				this._CoAuthoringApi.askSaveChanges(callback);
+			} else {
+				window.setTimeout(function () {
+					if (callback)
+						callback({ "saveLock": false });
+				}, 100);
+			}
+		};
+		coApi.saveChanges = function (arrayChanges, deleteIndex, excelAdditionalInfo, canUnlockDocument, canReleaseLocks) {
+			if (this._CoAuthoringApi && this._onlineWork) {
+				this._CoAuthoringApi.canUnlockDocument = canUnlockDocument;
+				this._CoAuthoringApi.canReleaseLocks = canReleaseLocks;
+				this._CoAuthoringApi.saveChanges(arrayChanges, null, deleteIndex, excelAdditionalInfo);
+			}
+		};
+	}
+	sendChangesToServer();
+
+	// The document as the server converted it, from the file the app downloaded: loaded as
+	// docbuilder loads (the same ids as the web editors), then the session's changes are applied
+	// as in the web editors and the engine starts again on the new document
+	api._onOpenCommand = function (url) {
+		var path = co.files[url];
+		var data = path ? window["native"]["GetFileBinary"](path) : null;
+		if (!data) {
+			api.sendEvent("asc_onError", Asc.c_oAscError.ID.DownloadError, Asc.c_oAscError.Level.Critical);
+			return;
+		}
+		var counter = AscCommon.g_oIdCounter;
+		var userId = counter.m_sUserId;
+		var user = api.User;
+		AscCommon.g_oTableId.Clear();
+		counter.Clear();
+		counter.m_nIdCounterLoad = co.idStart;
+		api.asc_nativeOpenFile(data);
+		counter.Set_Load(false);
+		if (userId !== null)
+			counter.Set_UserId(userId);
+		api.User = user;
+		sendChangesToServer();
+		co.loading = true;
+		api.isDocumentLoadComplete = false;
+		// The web editors wait for the document's images here; docbuilder's load has them
+		api.ServerImagesWaitComplete = true;
+		api._openDocumentEndCallback();
+	};
+
+	// Joins the session of the editor configuration the integration made (JSON: document,
+	// editorConfig, token, ...)
+	engine["coOpen"] = function (json) {
+		var config = JSON.parse(json);
+		var documentConfig = config["document"] || {};
+		var editorConfig = config["editorConfig"] || {};
+		var userConfig = editorConfig["user"] || {};
+		var user = new Asc.asc_CUserInfo();
+		user.put_Id(userConfig["id"]);
+		user.put_FullName(userConfig["name"]);
+		var info = new Asc.asc_CDocInfo();
+		info.put_Id(documentConfig["key"]);
+		info.put_Url(documentConfig["url"]);
+		info.put_Title(documentConfig["title"]);
+		info.put_Format(documentConfig["fileType"]);
+		info.put_Token(config["token"]);
+		info.put_Permissions(documentConfig["permissions"] || {});
+		info.put_CallbackUrl(editorConfig["callbackUrl"]);
+		info.put_Mode(editorConfig["mode"]);
+		info.put_UserInfo(user);
+		if (editorConfig["coEditing"] && info.put_CoEditingMode)
+			info.put_CoEditingMode(editorConfig["coEditing"]["mode"]);
+		api.asc_setDocInfo(info);
+		// After the server's license the document is opened, as web-apps does (once: the
+		// permissions may come again, and each load starts an action that blocks saving)
+		var loading = false;
+		api.asc_registerCallback("asc_onGetEditorPermissions", function () {
+			if (loading)
+				return;
+			loading = true;
+			api.asc_LoadDocument();
+		});
+		// The server's document is ready: the engine starts again on it
+		api.asc_registerCallback("asc_onDocumentContentReady", function () {
+			if (!co.loading)
+				return;
+			co.loading = false;
+			window["eoStartEngine"]();
+			co.reloaded = true;
+		});
+		// Changes go to the others at once (fast co-editing), sent each second
+		api.asc_SetFastCollaborative(true);
+		api.asc_setAutoSaveGap(1);
+		// The real client (in docbuilder sdkjs would work offline)
+		api.CoAuthoringApi.set_url(null);
+		api._coAuthoringInit();
+	};
+
+	// What sdkjs does on its 40 ms interval in the web editor (sending changes, unlocking); the
+	// app calls it on a timer while co-editing
+	engine["coTick"] = function () {
+		if (api.isDocumentLoadComplete)
+			api._autoSave();
+	};
+
+	// What sdkjs sends, as JSON: [{type: "connect", options} | {type: "emit", name, data} | {type: "disconnect"}]
+	engine["coTakeOutbox"] = function () {
+		var messages = co.outbox;
+		co.outbox = [];
+		return JSON.stringify(messages);
+	};
+
+	// An event of the socket (connect, message, disconnect, connect_error) or of its manager
+	// (reconnect_failed), with its arguments as a JSON array
+	engine["coReceive"] = function (name, argsJson) {
+		var socket = co.socket;
+		if (!socket)
+			return;
+		var args = argsJson ? JSON.parse(argsJson) : [];
+		if (name === "reconnect_failed")
+			socket.fire(socket.managerEvents, name, args);
+		else
+			socket.fire(socket.events, name, args);
+	};
+
+	// A file the app downloaded for a URL of the server
+	engine["coSetFile"] = function (url, path) {
+		co.files[url] = path;
+	};
+
+	// Whether the engine started again on the server's document since the last call: the app
+	// reads pages and sets languages, translations and the like again
+	engine["coTakeReloaded"] = function () {
+		var reloaded = !!co.reloaded;
+		co.reloaded = false;
+		return reloaded;
+	};
+
+	engine["coState"] = function () {
+		var coApi = api.CoAuthoringApi && api.CoAuthoringApi._CoAuthoringApi;
+		return JSON.stringify({ "state": coApi ? coApi.get_state() : -1 });
+	};
+}
+
+// Starts the engine on sdkjs' current document (again after co-editing loaded the server's)
+window["eoStartEngine"] = function () {
 	var api = window["Asc"]["editor"];
 	if (api.editorId === AscCommon.c_oEditorId.Spreadsheet) {
 		spreadsheetEngine(window, api);
@@ -525,6 +748,7 @@ function chartCommands(engine, api, options) {
 	};
 
 	var engine = window["eoEngine"] = {};
+	coEditingCommands(engine, api);
 	// Texts sdkjs puts into documents (table of contents, headers, placeholders), by their English text
 	engine["setTranslations"] = function (map) {
 		AscCommon.translateManager.init(map);
@@ -1464,6 +1688,7 @@ function chartCommands(engine, api, options) {
 			state["dirtyPages"][page] = true;
 	}
 	engine["undo"] = function () { api.Undo(); allPagesChanged(); };
+
 	// ---------------------------------------------------------------------------------
 	// Pictures and shapes
 
@@ -1742,7 +1967,10 @@ function chartCommands(engine, api, options) {
 		},
 		spellCheck: function (data) { spelling.queue.push(data); },
 		disconnect: function () {},
-		restart: function () { spelling.queue = []; }
+		restart: function () { spelling.queue = []; },
+		// The server's spell checker isn't used (co-editing)
+		init: function () {},
+		set_url: function () {}
 	};
 	api.isSpellCheckEnable = true;
 	// Turned off when the editor started without a spell checker (a counter: on at exactly 1)
@@ -1875,7 +2103,8 @@ function chartCommands(engine, api, options) {
 			"word": spellingState()
 		};
 	};
-})(window);
+};
+window["eoStartEngine"]();
 
 // Spreadsheets. The active sheet is one page: its used cells and some empty ones around them.
 // Tiles are drawn by the print path (WorksheetView.drawForPrint) with a print page made of the
@@ -1887,6 +2116,7 @@ function chartCommands(engine, api, options) {
 function spreadsheetEngine(window, api) {
 	var native = window["native"];
 	var engine = window["eoEngine"] = {};
+	coEditingCommands(engine, api);
 	// Texts sdkjs puts into documents (table of contents, headers, placeholders), by their English text
 	engine["setTranslations"] = function (map) {
 		AscCommon.translateManager.init(map);

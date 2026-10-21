@@ -91,3 +91,21 @@ Then:
 - `third_party/hunspell` becomes a submodule of the new repository (`.gitmodules` with `path = third_party/hunspell`).
 - editors-android takes the new repository as a submodule at `engine/`, so `libeditors` (`path("../engine/CMakeLists.txt")`) and AndroidEditors' scripts keep their paths.
 - The JNI binding (`src/jni/`) can stay in the engine repository behind `if(ANDROID)`, or move to `libeditors`.
+
+## Co-editing
+
+Documents of an integration (Nextcloud with the Euro-Office connector) are co-edited through the Document Server, with sdkjs' own co-authoring client (DocsCoApi), like in the web editors. `engine.js` (`coEditingCommands`):
+
+- **Socket:** sdkjs takes `window.io` as its socket.io client. The engine's socket queues what sdkjs sends (`coTakeOutbox`); the app carries it over socket.io (path `<server>/doc/<key>/c`, sdkjs' `auth` options) and passes the server's events back (`coReceive`).
+- **Opening:** `coOpen(config)` with the editor configuration of the integration (`/ocs/v2.php/apps/eurooffice/api/v1/config/<fileId>`). After the license, sdkjs opens the document; the server sends `documentOpen` with the URL of its `Editor.bin`. The app downloads it first and tells the engine (`coSetFile`), because sdkjs would load it over the web.
+- **Object ids:** changes name the objects they change by id, so a client must give the objects the ids the web editors give. docbuilder's load does (the web editors' load doesn't, from where the engine is), so the server's version is loaded the way docbuilder loads, from the id docbuilder started with. The document is a new object then: the engine starts again on it (`eoStartEngine`, `coTakeReloaded` tells the app).
+- **Changes** go to the server once a second (`coTick`, the web editors' 40 ms interval); docbuilder's redirection of changes to itself is undone.
+
+`tools/coedit/` checks this on the host: `driver.mjs` runs `eo-render` (`EO_REPL=1`, one script per line) in a session as the app will; `browser.mjs` is a web editor in the same session (Playwright). With the development environment of DocumentServer (Nextcloud with the connector):
+
+```sh
+cd engine/tools/coedit && npm install && npx playwright install chromium && cd -
+export RUN_ENGINE="docker run -i --rm --network host -v $PWD:/src -w /src -e LD_LIBRARY_PATH=/src/build/work/host/package -e EO_REPL=1 eo-core-base:desktop build/work/host/engine/eo-render build/work/host/package {doc} build/work/coedit 1"
+node editors-android/engine/tools/coedit/browser.mjs http://localhost:8081 admin admin file.docx ids 40 &
+node editors-android/engine/tools/coedit/driver.mjs http://localhost:8081 admin admin file.docx type
+```
