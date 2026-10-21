@@ -710,6 +710,11 @@ function chartCommands(engine, api, options) {
 			state["structure"] = null;
 		}
 		try {
+			state["forms"] = isPresentation ? null : formState();
+		} catch (e) {
+			state["forms"] = null;
+		}
+		try {
 			state["chart"] = engine["chartState"]();
 		} catch (e) {
 			state["chart"] = null;
@@ -1274,6 +1279,150 @@ function chartCommands(engine, api, options) {
 		api.asc_SetDisplayModeInReview(mode);
 		allPagesChanged();
 	};
+
+	// ---------------------------------------------------------------------------------
+	// Forms (content controls of docxf, oform and PDF forms)
+
+	// Filling: only form fields take input; role: only that role's fields ("" for all)
+	engine["setFillMode"] = function (fill, role) {
+		if (!fill) {
+			api.asc_setRestriction(Asc.c_oAscRestrictionType.None);
+			return;
+		}
+		// Without a role, the form's first (usually "Anyone"): fields of other roles can't be filled
+		var settings = new AscCommon.CRestrictionSettings();
+		var roles = JSON.parse(engine["getFormRoles"]());
+		var name = role || (roles.length ? roles[0]["name"] : "");
+		if (name)
+			settings.put_OFormRole(name);
+		api.asc_setRestriction(Asc.c_oAscRestrictionType.OnlyForms, settings);
+		allPagesChanged();
+	};
+
+	// Asc.c_oAscContentControlSpecificType as names
+	function formType(form) {
+		if (form.IsCheckBox && form.IsCheckBox())
+			return form.IsRadioButton && form.IsRadioButton() ? "radio" : "checkBox";
+		if (form.IsComboBox && form.IsComboBox())
+			return "comboBox";
+		if (form.IsDropDownList && form.IsDropDownList())
+			return "dropDownList";
+		if (form.IsPictureForm && form.IsPictureForm())
+			return form.IsSignatureForm && form.IsSignatureForm() ? "signature" : "picture";
+		if (form.IsDatePicker && form.IsDatePicker())
+			return "date";
+		if (form.IsComplexForm && form.IsComplexForm())
+			return "complex";
+		return "text";
+	}
+
+	function formJson(form) {
+		var type = formType(form);
+		var bounds = form.GetBoundingRect ? form.GetBoundingRect() : null;
+		var result = {
+			"id": form.GetId(), "key": form.GetFormKey ? form.GetFormKey() || "" : "", "type": type,
+			"placeholder": form.GetPlaceholderText ? form.GetPlaceholderText() || "" : "",
+			"required": !!(form.IsFormRequired && form.IsFormRequired()),
+			"empty": !!(form.IsPlaceHolder && form.IsPlaceHolder()),
+			"text": form.IsPlaceHolder && form.IsPlaceHolder() ? "" : (form.GetInnerText ? form.GetInnerText() || "" : ""),
+			"role": form.GetFormRole ? form.GetFormRole() || "" : "",
+			"help": form.GetFormPr && form.GetFormPr() && form.GetFormPr().GetHelpText ? form.GetFormPr().GetHelpText() || "" : "",
+			"page": bounds && !bounds.Invalid ? bounds.Page : -1,
+			"x": bounds ? bounds.X : 0, "y": bounds ? bounds.Y : 0, "width": bounds ? bounds.W : 0, "height": bounds ? bounds.H : 0
+		};
+		if (type === "checkBox" || type === "radio") {
+			result["checked"] = !!form.IsCheckBoxChecked();
+			result["group"] = form.GetCheckBoxPr && form.GetCheckBoxPr().GetGroupKey ? form.GetCheckBoxPr().GetGroupKey() || "" : "";
+		}
+		if (type === "comboBox" || type === "dropDownList") {
+			var list = type === "comboBox" ? form.GetComboBoxPr() : form.GetDropDownListPr();
+			var items = [];
+			for (var i = 0; list && i < list.GetItemsCount(); i++)
+				items.push({ "text": list.GetItemDisplayText(i) || "", "value": list.GetItemValue(i) || "" });
+			result["items"] = items;
+		}
+		if (type === "date") {
+			var date = form.GetDatePickerPr();
+			result["dateFormat"] = date && date.GetDateFormat ? date.GetDateFormat() || "" : "";
+		}
+		return result;
+	}
+
+	// All fields in document order
+	engine["getForms"] = function () {
+		var forms = logicDocument.GetFormsManager ? logicDocument.GetFormsManager().GetAllForms() : [];
+		return JSON.stringify(forms.map(formJson));
+	};
+
+	// Text, checked (true/false), a list item's value, a date (ISO) or a picture (its name in the images directory)
+	engine["setFormValue"] = function (id, type, value) {
+		engine["finishComposingText"]();
+		if (type === "text" || type === "complex") {
+			// From inside the field: filling allows changes only there
+			var control = AscCommon.g_oTableId.Get_ById(id);
+			if (control) {
+				logicDocument.RemoveSelection();
+				control.MoveCursorToContentControl(true);
+			}
+			if (value)
+				api.asc_SetContentControlText(value, id);
+			else
+				api.asc_ClearContentControl(id);
+		} else if (type === "checkBox" || type === "radio") {
+			api.asc_SetContentControlCheckBoxChecked(!!value, id);
+		} else if (type === "comboBox" || type === "dropDownList") {
+			api.asc_SelectContentControlListItem(value, id);
+		} else if (type === "date") {
+			var date = new AscCommon.CSdtDatePickerPr();
+			date.put_FullDate(value);
+			api.asc_SetContentControlDatePickerDate(date, id);
+		} else if (type === "picture" || type === "signature") {
+			preloadImage(api, value["name"], value["width"], value["height"]);
+			api.asc_SetFormValue(value["name"], id);
+		}
+		allPagesChanged();
+	};
+
+	// next, previous, nextRequired, clear (all fields)
+	engine["formAction"] = function (name) {
+		engine["finishComposingText"]();
+		if (name === "next" || name === "previous")
+			api.asc_MoveToFillingForm(name === "next", false, false);
+		else if (name === "nextRequired")
+			api.asc_MoveToFillingForm(true, true, true);
+		else if (name === "clear")
+			api.asc_ClearAllSpecialForms();
+		allPagesChanged();
+	};
+
+	// Roles of an oform: [{name, color "RRGGBB", fieldCount}]
+	engine["getFormRoles"] = function () {
+		var form = api.asc_GetOForm ? api.asc_GetOForm() : null;
+		var roles = form ? form.asc_getAllRoles() : [];
+		return JSON.stringify(roles.map(function (role) {
+			var settings = role.asc_getSettings();
+			var color = settings.getAscColor();
+			return {
+				"name": settings.getName() || "",
+				"color": color ? [color.asc_getR(), color.asc_getG(), color.asc_getB()].map(function (v) { return ("0" + v.toString(16)).slice(-2); }).join("") : "",
+				"fieldCount": settings.getFieldCount ? settings.getFieldCount() : 0
+			};
+		}));
+	};
+
+	// The form at the cursor and whether required ones are filled
+	function formState() {
+		var id = api.asc_GetCurrentContentControl ? api.asc_GetCurrentContentControl() : null;
+		var control = id ? AscCommon.g_oTableId.Get_ById(id) : null;
+		var hasForms = logicDocument.GetFormsManager && logicDocument.GetFormsManager().GetAllForms().length > 0;
+		if (!hasForms)
+			return null;
+		return {
+			"current": control && control.IsForm && control.IsForm() ? formJson(control) : null,
+			"filling": !!(api.isRestrictionForms && api.isRestrictionForms()),
+			"allRequiredFilled": !!api.asc_IsAllRequiredFormsFilled()
+		};
+	}
 
 	function structureState() {
 		var header = selectedElement(Asc.c_oAscTypeSelectElement.Header);

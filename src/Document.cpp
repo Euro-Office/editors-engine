@@ -126,6 +126,8 @@ namespace eo
 
 		// The password of an encrypted file, to save it encrypted again
 		std::wstring password;
+		// A PDF form (ONLYOFFICE's, opened in the document editor) is saved as one again
+		bool isPdfForm = false;
 
 		// Decoded images and metafiles, so tiles don't decode them again
 		NSImages::IImageFilesCache* imageCache = nullptr;
@@ -273,6 +275,9 @@ namespace eo
 			return converted;
 		}
 		m_private->password = password;
+		std::wstring extension = path.substr(path.find_last_of(L'.') + 1);
+		std::transform(extension.begin(), extension.end(), extension.begin(), ::towlower);
+		m_private->isPdfForm = extension == L"pdf";
 		timer.Log("convert (x2t)");
 
 		// The first command creates the V8 context and loads sdkjs with the document.
@@ -321,6 +326,8 @@ namespace eo
 			{ L"docm", AVS_OFFICESTUDIO_FILE_DOCUMENT_DOCM },
 			{ L"dotx", AVS_OFFICESTUDIO_FILE_DOCUMENT_DOTX },
 			{ L"dotm", AVS_OFFICESTUDIO_FILE_DOCUMENT_DOTM },
+			{ L"docxf", AVS_OFFICESTUDIO_FILE_DOCUMENT_DOCXF },
+			{ L"oform", AVS_OFFICESTUDIO_FILE_DOCUMENT_OFORM },
 			{ L"odt", AVS_OFFICESTUDIO_FILE_DOCUMENT_ODT },
 			{ L"ott", AVS_OFFICESTUDIO_FILE_DOCUMENT_OTT },
 			{ L"rtf", AVS_OFFICESTUDIO_FILE_DOCUMENT_RTF },
@@ -350,9 +357,12 @@ namespace eo
 		auto format = formats.find(key);
 		if (!m_private->builder || format == formats.end())
 			return -1;
+		int formatType = format->second;
+		if (key == L"pdf" && m_private->isPdfForm)
+			formatType = AVS_OFFICESTUDIO_FILE_DOCUMENT_OFORM_PDF;
 		m_private->Run(L"eoEngine.beforeSave();");
 		std::wstring params = password.empty() ? L"" : L"<m_sSavePassword>" + XmlEscape(password) + L"</m_sSavePassword>";
-		int error = m_private->builder->SaveFile(format->second, path.c_str(), params.empty() ? nullptr : params.c_str());
+		int error = m_private->builder->SaveFile(formatType, path.c_str(), params.empty() ? nullptr : params.c_str());
 		m_private->Run(std::wstring(L"eoEngine.afterSave(") + (error == 0 ? L"true" : L"false") + L");");
 		return error;
 	}
