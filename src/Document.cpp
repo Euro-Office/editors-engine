@@ -2,13 +2,17 @@
 
 #include "engine_js.h"
 
+#include "Common/OfficeFileFormats.h"
 #include "DesktopEditor/doctrenderer/docbuilder.h"
 #include "DesktopEditor/doctrenderer/embed/GraphicsEmbed.h"
 #include "DesktopEditor/graphics/pro/Fonts.h"
 #include "DesktopEditor/graphics/pro/Image.h"
 
+#include <algorithm>
 #include <codecvt>
+#include <cwctype>
 #include <locale>
+#include <map>
 #include <string>
 
 #ifdef __ANDROID__
@@ -162,6 +166,34 @@ namespace eo
 			m_private->builder->CloseFile();
 		m_private->builder.reset();
 		RELEASEINTERFACE(m_private->imageCache);
+	}
+
+	int Document::Save(const std::wstring& path, const std::wstring& extension)
+	{
+		// docbuilder's own extension list is short and falls back to docx
+		static const std::map<std::wstring, int> formats = {
+			{ L"docx", AVS_OFFICESTUDIO_FILE_DOCUMENT_DOCX },
+			{ L"docm", AVS_OFFICESTUDIO_FILE_DOCUMENT_DOCM },
+			{ L"dotx", AVS_OFFICESTUDIO_FILE_DOCUMENT_DOTX },
+			{ L"dotm", AVS_OFFICESTUDIO_FILE_DOCUMENT_DOTM },
+			{ L"odt", AVS_OFFICESTUDIO_FILE_DOCUMENT_ODT },
+			{ L"ott", AVS_OFFICESTUDIO_FILE_DOCUMENT_OTT },
+			{ L"rtf", AVS_OFFICESTUDIO_FILE_DOCUMENT_RTF },
+			{ L"txt", AVS_OFFICESTUDIO_FILE_DOCUMENT_TXT },
+			{ L"html", AVS_OFFICESTUDIO_FILE_DOCUMENT_HTML },
+			{ L"epub", AVS_OFFICESTUDIO_FILE_DOCUMENT_EPUB },
+			{ L"fb2", AVS_OFFICESTUDIO_FILE_DOCUMENT_FB2 },
+			{ L"pdf", AVS_OFFICESTUDIO_FILE_CROSSPLATFORM_PDF }
+		};
+		std::wstring key = extension;
+		std::transform(key.begin(), key.end(), key.begin(), ::towlower);
+		auto format = formats.find(key);
+		if (!m_private->builder || format == formats.end())
+			return -1;
+		m_private->Run(L"eoEngine.beforeSave();");
+		int error = m_private->builder->SaveFile(format->second, path.c_str());
+		m_private->Run(std::wstring(L"eoEngine.afterSave(") + (error == 0 ? L"true" : L"false") + L");");
+		return error;
 	}
 
 	std::string Document::Execute(const std::wstring& script)

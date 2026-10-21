@@ -47,7 +47,7 @@ int main(int argc, char* argv[])
 {
 	if (argc < 4)
 	{
-		std::cerr << "Usage: eo-render <runtime dir> <document> <output dir> [scale]" << std::endl;
+		std::cerr << "Usage: eo-render <runtime dir> <document> <output dir> [scale] [script.js | save path ...]" << std::endl;
 		return 1;
 	}
 	const std::string outDir = argv[3];
@@ -68,6 +68,15 @@ int main(int argc, char* argv[])
 
 		for (int i = 5; i < argc; ++i)
 		{
+			// Other arguments than scripts: save the document there
+			const std::string arg = argv[i];
+			if (arg.size() < 3 || arg.substr(arg.size() - 3) != ".js")
+			{
+				start = std::chrono::steady_clock::now();
+				int error = document.Save(ToWide(arg), ToWide(arg.substr(arg.find_last_of('.') + 1)));
+				std::cout << "save " << arg << " (" << MillisecondsSince(start) << " ms): " << error << std::endl;
+				continue;
+			}
 			std::ifstream file(argv[i]);
 			std::stringstream script;
 			script << file.rdbuf();

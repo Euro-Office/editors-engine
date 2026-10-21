@@ -82,6 +82,7 @@
 		"selection": [],      // [{page, points: [x1, y1, ... x4, y4]}]
 		"dirtyPages": {},     // pages to draw again
 		"layoutChanged": false,
+		"modified": false,     // changed since opening or the last save
 		"interface": {}       // asc_on* values: bold, italic, canUndo, ...
 	};
 	var cursorVisible = false;
@@ -178,6 +179,7 @@
 	// State as JSON; pages to draw again and layout changes are reported once
 	engine["getState"] = function () {
 		updateSelection();
+		state["modified"] = api.isDocumentModified();
 		var result = JSON.stringify(state);
 		state["dirtyPages"] = {};
 		state["layoutChanged"] = false;
@@ -309,6 +311,29 @@
 	engine["selectAll"] = function () {
 		engine["finishComposingText"]();
 		logicDocument.SelectAll();
+	};
+
+	// Saving (Document::Save). After exporting to PDF, docbuilder turns builder mode's
+	// silent mode back on (its recalculation counter is balanced, the interface flags
+	// are not) and lays the document out again; editing continues where it was.
+	var savedState = null;
+
+	engine["beforeSave"] = function () {
+		engine["finishComposingText"]();
+		savedState = logicDocument.SaveDocumentState();
+	};
+
+	engine["afterSave"] = function (success) {
+		logicDocument.TurnOn_InterfaceEvents(false);
+		logicDocument.TurnOn_RecalculateCurPos(false);
+		if (savedState) {
+			logicDocument.LoadDocumentState(savedState);
+			logicDocument.UpdateSelection();
+			logicDocument.Document_UpdateInterfaceState();
+		}
+		savedState = null;
+		if (success)
+			api.SetUnchangedDocument();
 	};
 
 	// Toolbar commands

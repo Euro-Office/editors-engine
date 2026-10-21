@@ -51,6 +51,13 @@ extern "C"
 		return FromHandle(handle)->Open(ToWide(env, path), ToWide(env, tempDir)) ? JNI_TRUE : JNI_FALSE;
 	}
 
+	// 0, the x2t error code or -1 for a format the engine can't write
+	JNIEXPORT jint JNICALL
+	Java_lib_editors_base_engine_NativeEngine_nativeSave(JNIEnv* env, jobject, jlong handle, jstring path, jstring extension)
+	{
+		return FromHandle(handle)->Save(ToWide(env, path), ToWide(env, extension));
+	}
+
 	// UTF-8 bytes (NewStringUTF would need "modified" UTF-8)
 	JNIEXPORT jbyteArray JNICALL
 	Java_lib_editors_base_engine_NativeEngine_nativeExecute(JNIEnv* env, jobject, jlong handle, jstring script)
