@@ -28,7 +28,7 @@
 FROM core-host AS engine-host
 
     ENV RUNTIME=/package/bin
-    ENV LD_LIBRARY_PATH=/package/bin
+    ENV LD_LIBRARY_PATH=/package/bin:/engine
     ENV PATH=/engine:${PATH}
 
     # Runtime: sdkjs, the font index of core-fonts, the PDF editor's blank document
@@ -53,7 +53,7 @@ FROM core-host AS engine-host
         cmake -S /editors-engine -B /build-cache/engine -G Ninja -DCMAKE_BUILD_TYPE=Release \
             -DCORE_SOURCE_DIR=/core -DCORE_LIBS_DIR=${RUNTIME} -DEO_ENGINE_TOOLS=ON && \
         cmake --build /build-cache/engine && \
-        mkdir -p /engine && cp /build-cache/engine/eo-render /engine/
+        mkdir -p /engine && cp /build-cache/engine/eo-render /build-cache/engine/libeoengine.so /engine/
 
 #### ENGINE TESTS ####
 FROM engine-host AS engine-tests-run
