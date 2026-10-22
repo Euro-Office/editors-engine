@@ -2252,6 +2252,49 @@ window["eoStartEngine"] = function () {
 		engine["finishComposingText"]();
 		api.WordControl.GoToPage(index);
 	};
+	// The selected objects, dragged off the current slide, go to [slide], whose top is
+	// [offset] mm below the current slide's top in the app's layout: they keep their place
+	// under the finger. As cut and paste, as sdkjs has no move between slides
+	engine["moveToSlide"] = function (slide, offset) {
+		var current = logicDocument.CurPage;
+		if (slide === current || slide < 0 || slide >= logicDocument.GetSlidesCount())
+			return;
+		function selection() {
+			var controller = logicDocument.GetCurrentController();
+			return controller ? controller.getSelectedArray() : [];
+		}
+		function top(drawings) {
+			return Math.min.apply(null, drawings.map(function (drawing) { return drawing.y; }));
+		}
+		function left(drawings) {
+			return Math.min.apply(null, drawings.map(function (drawing) { return drawing.x; }));
+		}
+		var moved = selection();
+		if (moved.length === 0)
+			return;
+		var x = left(moved), y = top(moved) - offset;
+		var copied = JSON.parse(engine["copy"]())["internal"];
+		if (!copied)
+			return;
+		api.asc_SelectionCut();
+		engine["gotoSlide"](slide);
+		api.asc_PasteData(AscCommon.c_oAscClipboardDataFormat.Internal, copied);
+		// Pasted where they were on their slide: moved to where they were dropped
+		var pasted = selection();
+		if (pasted.length === 0)
+			return;
+		var dx = x - left(pasted), dy = y - top(pasted);
+		logicDocument.StartAction(AscDFH.historydescription_CommonDrawings_EndTrack);
+		pasted.forEach(function (drawing) {
+			AscFormat.CheckSpPrXfrm(drawing);
+			var xfrm = drawing.spPr.xfrm;
+			xfrm.setOffX(xfrm.offX + dx);
+			xfrm.setOffY(xfrm.offY + dy);
+		});
+		logicDocument.Recalculate();
+		logicDocument.FinalizeAction();
+		allPagesChanged();
+	};
 	engine["duplicateSlide"] = function () {
 		var current = logicDocument.CurPage;
 		logicDocument.shiftSlides(current + 1, [current], true);
