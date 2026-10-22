@@ -367,6 +367,9 @@ function pdfEngine(api) {
 		viewer.startVisiblePage = 0;
 		viewer.endVisiblePage = viewer.file.pages.length - 1;
 		viewer.updatePageDetector();
+		// The pages' places for the drawing document: taps into text boxes convert their points
+		// with them (UpdateCursorType); the viewer updates them as it scrolls, which it doesn't here
+		viewer.UpdateDrDocDrawingPages();
 		doc.UpdatePagesTransform();
 		// sdkjs sets it while painting the visible pages (not here: the app sets it as pages come
 		// into view); deleting and locks need one from the start, the viewer starts with -1
@@ -816,6 +819,9 @@ function pdfEngine(api) {
 	};
 
 	engine["keyDown"] = function (keyCode, shift, ctrl) {
+		// The word being composed stays where it is (see engine.js)
+		if (api.compositeInput)
+			engine["finishComposingText"]();
 		var e = new AscCommon.CKeyboardEvent();
 		e.KeyCode = keyCode;
 		e.ShiftKey = shift;

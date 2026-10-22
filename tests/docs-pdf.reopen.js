@@ -31,6 +31,12 @@ t.run("adds a text box", function () {
 	eoEngine.mouse(2, 0, 150, 250, 1, false, false);
 	t.eq("its text", box.GetContents(), "A text box");
 });
+t.run("places the pages for taps into text boxes", function () {
+	// Taps on text boxes laid out by drawing convert their points with the pages' places
+	var drawingDocument = Asc.editor.getPDFDoc().GetDrawingDocument();
+	t.eq("a place per page", drawingDocument.m_arrPages.length, eoEngine.getPageCount());
+	t.ok("points convert", !drawingDocument.ConvertCoordsToCursorWR(10, 10, 0).Error);
+});
 t.run("copies, pastes and deletes a text box", function () {
 	var count = annotations();
 	click(0, 60, 80);
