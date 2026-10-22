@@ -69,7 +69,9 @@ function drawingFrame(matrix, extX, extY) {
 // The state's "drawings": frames of the selected pictures and shapes ([{drawing, page}]) with
 // their rotation handle, or while they are moved, resized or rotated (controller's track
 // objects), where they would go
-function drawingStates(selected, controller) {
+// onePage: objects stay on the page of the selected ones while they are moved (presentations,
+// whose tracks don't say their slide)
+function drawingStates(selected, controller, onePage) {
 	var page = selected.length ? selected[0].page : -1;
 	var tracks = controller && controller.arrTrackObjects || [];
 	if (tracks.length && page >= 0) {
@@ -77,7 +79,7 @@ function drawingStates(selected, controller) {
 			var source = track.originalObject || {};
 			var extX = track.resizedExtX !== undefined ? track.resizedExtX : source.extX;
 			var extY = track.resizedExtY !== undefined ? track.resizedExtY : source.extY;
-			return { "page": typeof track.pageIndex === "number" ? track.pageIndex : page, "points": drawingFrame(track.transform, extX, extY), "tracking": true };
+			return { "page": typeof track.pageIndex === "number" && !onePage ? track.pageIndex : page, "points": drawingFrame(track.transform, extX, extY), "tracking": true };
 		});
 	}
 	return selected.map(function (item) {
@@ -1190,7 +1192,7 @@ window["eoStartEngine"] = function () {
 		editor.drawTextSelection();
 		drawingDocument.TextMatrix = textMatrix;
 
-		state["drawings"] = drawingStates(editor.selectedDrawings(), editor.drawingController());
+		state["drawings"] = drawingStates(editor.selectedDrawings(), editor.drawingController(), isPresentation);
 	}
 
 	function pageChanged(page) {
