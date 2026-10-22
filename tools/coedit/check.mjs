@@ -203,6 +203,27 @@ async function check(source, path) {
             await until("the web editor gets the engine's picture", async () => (await web.pictures()) > pictures);
         }
 
+        // PDFs: text boxes, signatures (pictures placed on the page) and deleting them
+        if (kind === "pdf") {
+            const boxText = `Box ${Date.now() % 100000}`;
+            // sdkjs adds the box once its font is loaded
+            await engine.run("eoEngine.addFreeText(0, 100, 150); ''");
+            await until("the engine adds a text box", async () => (await engine.run("String(!!Asc.editor.getPDFDoc().mouseDownAnnot)")) === "true");
+            await engine.run(`eoEngine.commitText(${JSON.stringify(boxText)}); ` +
+                "eoEngine.mouse(0, 0, 20, 250, 1, false, false); eoEngine.mouse(2, 0, 20, 250, 1, false, false); ''");
+            // The app reads the state after each command: then boxes left while locks were pending are stored
+            await until("the web editor gets the engine's text box", async () => {
+                await engine.run("eoEngine.getState(); ''");
+                return (await web.text()).includes(boxText);
+            });
+            const pictures = await web.pictures();
+            await engine.placePicture(PIXEL_PNG, 30, 30);
+            await until("the web editor gets the engine's signature", async () => (await web.pictures()) > pictures);
+            await engine.run("eoEngine.mouse(0, 0, 100, 150, 1, false, false); eoEngine.mouse(2, 0, 100, 150, 1, false, false); " +
+                "eoEngine.keyDown(46, false, false); ''");
+            await until("the web editor sees the text box deleted", async () => !(await web.text()).includes(boxText));
+        }
+
         // Someone who may only view the document (test storage: a second engine) sees the
         // others' changes as they come, and changes nothing
         if (viewerConfig) {

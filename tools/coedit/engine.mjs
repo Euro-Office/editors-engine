@@ -139,9 +139,11 @@ export async function joinWithEngine({ config, documentPath, workDir, runEngine,
             }
             throw new Error("the engine didn't join the session");
         },
-        /** The text of the document (presentations: the first slide's; PDFs: the notes'). */
+        /** The text of the document (presentations: the first slide's; PDFs: the notes' and text boxes'). */
         async text() {
-            if (type === "pdf") return run("Asc.editor.getPDFDoc().annots.map(function (annot) { return annot.GetContents() || ''; }).join(' / ')");
+            // Text boxes: their text
+            if (type === "pdf") return run("Asc.editor.getPDFDoc().annots.map(function (annot) { var content = annot.IsFreeText() && annot.GetDocContent(); " +
+                "return content ? content.GetText({ ParaSeparator: ' ' }).trim() : annot.GetContents() || ''; }).join(' / ')");
             if (type === "slide") return JSON.parse(await run("eoEngine.textBlocks(0)")).map((block) => block.text).join(" / ");
             if (type === "cell") return run("Asc.editor.wbModel.getWorksheet(0).getCell3(0, 0).getValue() + ' / ' + Asc.editor.wbModel.getWorksheet(0).getCell3(1, 0).getValue()");
             return JSON.parse(await run("JSON.stringify(Asc.editor.WordControl.m_oLogicDocument.GetText({ParaSeparator: ' / '}))"));
@@ -168,21 +170,34 @@ export async function joinWithEngine({ config, documentPath, workDir, runEngine,
         },
         /** Inserts a picture as the app does: uploaded to the Document Server, then by the server's name. */
         async insertPicture(png) {
-            const info = JSON.parse(await run("eoEngine.coUploadInfo()"));
-            const response = await fetch(new URL(`upload/${encodeURIComponent(info.documentId)}`, serverUrl), {
-                method: "POST", body: png, headers: { "Content-Type": "image/png", Authorization: `Bearer ${info.token}` }
-            });
-            if (!response.ok) throw new Error(`upload: HTTP ${response.status}`);
-            const urls = await response.json();
-            const key = Object.keys(urls).find((name) => name.startsWith("media/"));
-            if (!key) throw new Error(`upload: ${JSON.stringify(urls)}`);
-            const name = key.slice("media/".length);
-            writeFileSync(join(imagesDir, name), png);
-            await run(`eoEngine.coAddUrls(${q(JSON.stringify(urls))}); ''`);
+            const name = await upload(png);
             if (type === "slide") await run("eoEngine.gotoSlide(0); ''");
             await run(`eoEngine.insertImage(${q(name)}, 1, 1); ''`);
             return name;
         },
+        /** PDFs: places a picture as the app places a signature, at (x, y) on the first page (mm). */
+        async placePicture(png, x, y) {
+            const name = await upload(png);
+            await run(`eoEngine.placeImage(${q(name)}, 1, 1, 0, ${x}, ${y}, 40, 20); ''`);
+            return name;
+        }
+    };
+    /** Uploads a picture to the Document Server as the app does; returns its name in the document. */
+    async function upload(png) {
+        const info = JSON.parse(await run("eoEngine.coUploadInfo()"));
+        const response = await fetch(new URL(`upload/${encodeURIComponent(info.documentId)}`, serverUrl), {
+            method: "POST", body: png, headers: { "Content-Type": "image/png", Authorization: `Bearer ${info.token}` }
+        });
+        if (!response.ok) throw new Error(`upload: HTTP ${response.status}`);
+        const urls = await response.json();
+        const key = Object.keys(urls).find((name) => name.startsWith("media/"));
+        if (!key) throw new Error(`upload: ${JSON.stringify(urls)}`);
+        const name = key.slice("media/".length);
+        writeFileSync(join(imagesDir, name), png);
+        await run(`eoEngine.coAddUrls(${q(JSON.stringify(urls))}); ''`);
+        return name;
+    }
+    Object.assign(participant, {
         /** Draws a page into a PNG (path relative to the current directory); returns its pixels in the red of others' locks. */
         async render(page, path) {
             return Number(await run(`!render ${page} ${path}`));
@@ -205,7 +220,7 @@ export async function joinWithEngine({ config, documentPath, workDir, runEngine,
             await wait(500);
             engine.stop();
         }
-    };
+    });
     return participant;
 }
 

@@ -47,9 +47,15 @@ export async function joinWithBrowser({ url, nextcloud = null, log = () => {} })
 
     const participant = {
         run,
-        /** The text of the document (presentations: the first slide's text boxes; PDFs: the notes'). */
+        /** The text of the document (presentations: the first slide's text boxes; PDFs: the notes' and text boxes'). */
         text: () => run((type) => {
-            if (type === "pdf") return Asc.editor.getPDFDoc().annots.map((annot) => annot.GetContents() || "").join(" / ");
+            if (type === "pdf") {
+                // Text boxes: their text
+                return Asc.editor.getPDFDoc().annots.map((annot) => {
+                    const content = annot.IsFreeText() && annot.GetDocContent();
+                    return content ? content.GetText({ ParaSeparator: " " }).trim() : annot.GetContents() || "";
+                }).join(" / ");
+            }
             if (type === "slide") {
                 return Asc.editor.WordControl.m_oLogicDocument.Slides[0].cSld.spTree
                     .filter((shape) => shape.getDocContent && shape.getDocContent())
@@ -61,13 +67,14 @@ export async function joinWithBrowser({ url, nextcloud = null, log = () => {} })
             }
             return Asc.editor.WordControl.m_oLogicDocument.GetText({ ParaSeparator: " / " });
         }, type),
-        /** Pictures in the document (presentations: on the first slide). */
+        /** Pictures in the document (presentations: on the first slide; PDFs: pictures and shapes). */
         pictures: () => run((type) => {
             if (type === "slide") {
                 return Asc.editor.WordControl.m_oLogicDocument.Slides[0].cSld.spTree
                     .filter((shape) => shape.getObjectType() === AscDFH.historyitem_type_ImageShape).length;
             }
             if (type === "cell") return Asc.editor.wbModel.getWorksheet(0).Drawings.length;
+            if (type === "pdf") return Asc.editor.getPDFDoc().drawings.length;
             return Asc.editor.WordControl.m_oLogicDocument.GetAllDrawingObjects().length;
         }, type),
         /** Types at the start of the document (presentations: of the first text box; spreadsheets: into A2). */
