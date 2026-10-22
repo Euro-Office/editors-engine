@@ -16,6 +16,7 @@
 
 #include "DesktopEditor/raster/BgraFrame.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <codecvt>
@@ -241,8 +242,9 @@ int main(int argc, char* argv[])
 			{
 				if (line.empty())
 					continue;
-				// "!render <page> <png path>": draws the page (scale 1) into a PNG; the result is
-				// the number of pixels in the red of others' locks
+				// "!render <page> <png path> [<width> <height>]": draws the page (scale 1), or its top
+				// left part of that many pixels as a tile of the app, into a PNG; the result is the
+				// number of pixels in the red of others' locks
 				if (line.rfind("!render ", 0) == 0)
 				{
 					std::istringstream command(line.substr(8));
@@ -250,10 +252,16 @@ int main(int argc, char* argv[])
 					std::string path;
 					command >> page >> path;
 					eo::PageSize size = document.GetPageSize(page);
-					const int w = (int)(size.widthMm / 25.4 * 96 + 0.5);
-					const int h = (int)(size.heightMm / 25.4 * 96 + 0.5);
+					const int pageW = (int)(size.widthMm / 25.4 * 96 + 0.5);
+					const int pageH = (int)(size.heightMm / 25.4 * 96 + 0.5);
+					int w = pageW, h = pageH;
+					if (int tileW = 0, tileH = 0; command >> tileW >> tileH)
+					{
+						w = std::min(w, tileW);
+						h = std::min(h, tileH);
+					}
 					std::vector<unsigned char> pixels(4 * w * h);
-					document.RenderTile(page, w, h, 0, 0, w, h, pixels.data(), false);
+					document.RenderTile(page, pageW, pageH, 0, 0, w, h, pixels.data(), false);
 					SavePng(pixels, w, h, path);
 					size_t red = 0;
 					for (size_t i = 0; i < pixels.size(); i += 4)
