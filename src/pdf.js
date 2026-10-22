@@ -670,7 +670,34 @@ function pdfEngine(api) {
 		state["error"] = String(e) + (e && e.stack ? "\n" + e.stack : "");
 	};
 
+	// Text typed into a text box reaches the others once it leaves the box: Blur stores it in
+	// the annotation (a change). While sdkjs waits for the server's locks that is refused and
+	// the text would stay here: such boxes are stored again once the locks are there
+	var pendingTextBoxes = [];
+	var freeText = AscPDF.CAnnotationFreeText.prototype;
+	if (!freeText.eoBlur) {
+		freeText.eoBlur = freeText.Blur;
+		freeText.Blur = function () {
+			if (this.IsInTextBox() && AscCommon.CollaborativeEditing.Get_GlobalLock() && freeText.eoPending)
+				freeText.eoPending.push(this);
+			return freeText.eoBlur.apply(this, arguments);
+		};
+	}
+	freeText.eoPending = pendingTextBoxes;
+	function storePendingTextBoxes() {
+		if (pendingTextBoxes.length === 0 || AscCommon.CollaborativeEditing.Get_GlobalLock())
+			return;
+		pendingTextBoxes.splice(0).forEach(function (box) {
+			if (box.IsInTextBox() || doc.annots.indexOf(box) < 0)
+				return;
+			// Blur stores only the text of a box being edited
+			box.isInTextBox = true;
+			box.Blur();
+		});
+	}
+
 	engine["getState"] = function () {
+		storePendingTextBoxes();
 		// The cursor, as the viewer places it when it paints (see stopPainting), in text laid
 		// out as when it is drawn
 		var textController = doc.getTextController();
