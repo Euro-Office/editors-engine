@@ -840,9 +840,34 @@ function pdfEngine(api) {
 		api.asc_StartDrawInk(stroke);
 	};
 	engine["stopInk"] = function () { api.asc_StopInkDrawer(); };
-	// A text box on the page (free text annotation), at the last touch
-	engine["addFreeText"] = function () {
-		api.AddFreeTextAnnot(AscPDF.FREE_TEXT_INTENT_TYPE ? AscPDF.FREE_TEXT_INTENT_TYPE.FreeText : 0);
+	// A text box (free text annotation) centered on a point of a page (mm), taking the typing.
+	// sdkjs centers it on the part of the page shown (getViewingRect), here that point; it may
+	// add it later, once its font is loaded
+	engine["addFreeText"] = function (page, x, y) {
+		var size = pageSize(page);
+		var point = { x: x / size[0], y: y / size[1] };
+		point.r = point.x;
+		point.b = point.y;
+		viewer.currentPage = page;
+		doc.AddFreeTextAnnot = function (type) {
+			delete doc.AddFreeTextAnnot;
+			var getViewingRect = viewer.getViewingRect;
+			viewer.getViewingRect = function () { return point; };
+			try {
+				doc.AddFreeTextAnnot(type, page);
+				// Laid out as when it is drawn: typing fits it to its text from its size then
+				var annot = doc.mouseDownAnnot;
+				if (annot)
+					annot.Recalculate();
+				// The cursor in it, as after a tap into it
+				drawingDocument.TargetStart(true);
+				doc.SetNeedUpdateTarget(true);
+			} finally {
+				viewer.getViewingRect = getViewingRect;
+				state["dirtyPages"][page] = true;
+			}
+		};
+		api.AddFreeTextAnnot(AscPDF.FREE_TEXT_INTENT_TYPE.freeText);
 	};
 
 	// Comments: notes on the page and the comments of annotations,

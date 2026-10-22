@@ -20,6 +20,17 @@ t.run("adds a note", function () {
 	eoEngine.addComment("A note");
 	t.ok("the note", JSON.parse(eoEngine.getComments()).some(function (comment) { return comment.text === "A note"; }));
 });
+t.run("adds a text box", function () {
+	var count = annotations();
+	eoEngine.addFreeText(0, 60, 80);
+	t.eq("a free text annotation", annotations(), count + 1);
+	t.ok("the cursor in it", t.state().cursor !== null);
+	eoEngine.enterText("A text box");
+	var box = Asc.editor.getPDFDoc().annots[annotations() - 1];
+	eoEngine.mouse(0, 0, 150, 250, 1, false, false);
+	eoEngine.mouse(2, 0, 150, 250, 1, false, false);
+	t.eq("its text", box.GetContents(), "A text box");
+});
 t.run("draws with the pen", function () {
 	var count = annotations();
 	eoEngine.startInk("E53935", 0.7);
