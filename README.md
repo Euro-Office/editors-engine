@@ -1,10 +1,12 @@
-# Engine
+# editors-engine
 
-The C++ engine behind `libeditors`. It runs current sdkjs in core's doctrenderer (V8) and draws pages with core's graphics engine.
+The engine of the Euro-Office mobile editors, shared by the apps for Android ([editors-android](https://github.com/Euro-Office/editors-android)) and iOS ([editors-ios](https://github.com/Euro-Office/editors-ios)). It runs current sdkjs in core's doctrenderer (V8) and draws pages with core's graphics engine. It is a submodule of [MobileEditors](https://github.com/Euro-Office/MobileEditors), which pins core and sdkjs.
 
 ```
-Kotlin UI (libg*) ── libeditors (EditorEngine, EditorDocument) ── JNI (src/jni) ── eo::Document (src) ── core's docbuilder/doctrenderer + sdkjs
+app UI ── app binding (Android: libeditors' JNI) ── eo::Document (src) ── core's docbuilder/doctrenderer + sdkjs
 ```
+
+The apps talk to the engine through `eo::Document` (C++) and the commands of `engine.js`/`pdf.js` (`eoEngine.*`, JSON state); their bindings live in the app repositories.
 
 ## Pieces
 
@@ -14,7 +16,6 @@ Kotlin UI (libg*) ── libeditors (EditorEngine, EditorDocument) ── JNI (s
 | `src/engine.js` | Runs in sdkjs after opening (embedded as `engine_js.h`): leaves docbuilder's builder mode, lays out the document, draws tiles |
 | `src/pdf.js` | Runs after `engine.js` for PDFs (embedded as `pdf_js.h`): sdkjs' PDF editor in the engine, see [PDFs](#pdfs) |
 | `src/DrawingDocument.h/.cpp` | `eo::DrawingDocument`: PDF, XPS and DjVu through core's readers (PdfFile, XpsFile, DjVuFile), no sdkjs: pages, tiles, PDF passwords; the pages under sdkjs' PDF editor and saving its changes |
-| `src/jni/DocumentJni.cpp` | JNI for `lib.editors.base.engine.NativeEngine` (Android only); draws into `Bitmap`s |
 | `tools/render.cpp` | Desktop check: renders page 1 whole and from tiles, compares both and saves PNGs |
 
 ## How it works
@@ -22,7 +23,7 @@ Kotlin UI (libg*) ── libeditors (EditorEngine, EditorDocument) ── JNI (s
 - **Opening.** `CDocBuilder` opens the file: x2t converts it to sdkjs' format, then doctrenderer loads sdkjs with the document. On Android, x2t runs in-process through `CDocBuilder::SetX2tConverter`, because apps can't start the x2t executable.
 - **Builder mode.** docbuilder opens documents for scripting: no layout, no interface events, no undo. `engine.js` switches those back on and lays the document out.
 - **Drawing.** sdkjs draws a page into `CNativeGraphics`, which is core's `CGraphicsEmbed`. The engine attaches its own `CGraphicsAppImage` to the graphics object, so sdkjs draws straight into the caller's buffer (an Android bitmap). The app image also provides fonts loaded once and an image cache shared by all tiles of a document.
-- **Saving.** `CDocBuilder::SaveFile` takes the edited document from sdkjs and x2t converts it to the target format (docx, odt, rtf, txt, pdf, ...; not doc). The app saves into a temporary file first and then replaces the document. Editing continues afterwards: after a PDF export, docbuilder turns builder mode's silent mode back on and lays the document out again, so `engine.js` restores the interface events and the cursor.
+- **Saving.** `CDocBuilder::SaveFile` takes the edited document from sdkjs and x2t converts it to the target format (docx, odt, rtf, txt, ...; not doc). PDFs are written by the engine (`Document::ExportPdf`): sdkjs draws the pages into drawing commands and core's PDF writer turns them into the file, as x2t does; x2t's own renderer can't be used, as it reads `DoctRenderer.config` from the program's directory (on Android the system's). The app saves into a temporary file first and then replaces the document. Editing continues afterwards: after a PDF export, docbuilder turns builder mode's silent mode back on and lays the document out again, so `engine.js` restores the interface events and the cursor.
 - **Layout.** Like the web editor, sdkjs lays out the first pages when a document opens and the others on timers, and after an edit lays out only what changed before continuing on timers. `engine.js` gives sdkjs a timer queue (native.js ignores timers); the app runs it in slices of 30 ms (`EditorDocument.tick`) while `layoutPending` is true. Input waits for one slice at most, and the first page shows without waiting for the whole document.
 - **Errors.** Commands run in try/catch; an exception in sdkjs comes back in the state (`error`) and the app logs it.
 - **Threading.** sdkjs is single-threaded. A document is created, used and closed on one thread (`EditorEngine.dispatcher` on Android).
@@ -36,7 +37,7 @@ The runtime directory (`Document::Initialize`) contains:
 - `bundled-fonts/`: Liberation, Carlito, Caladea and Open Sans, the open fonts with the metrics of Arial, Times New Roman, Courier New, Calibri and Cambria
 - `fonts/`: the font index (`AllFonts.js`, `font_selection.bin`)
 
-On Android, `libeditors` packs these files into the APK. `EditorEngine` unpacks them on first use and generates the font index from the bundled fonts and `/system/fonts`.
+On Android, editors-android's `libeditors` packs these files into the APK. `EditorEngine` unpacks them on first use and generates the font index from the bundled fonts and `/system/fonts`.
 
 ## Desktop check
 
@@ -89,21 +90,7 @@ PDFs (other than ONLYOFFICE's forms, which docbuilder opens in the document edit
 
 ## Tests
 
-`tests/` has regression tests: scripts that run on document-templates' samples with `eo-render` and check the results (`lib.js` has the assertions). `tests/run.sh` runs them; how to build `eo-render` for the host is in AndroidEditors' `build/scripts/engine-host.sh`.
-
-## Own repository
-
-The engine has no Android code outside `src/jni/` and builds on its own (CMake, against core), so it can be shared with other platforms (an iOS app, with core's JavaScriptCore backend instead of V8). To move it into a repository of its own, keeping its history:
-
-```sh
-git clone https://github.com/Euro-Office/editors-android engine-repo && cd engine-repo
-git filter-repo --subdirectory-filter engine
-```
-
-Then:
-- `third_party/hunspell` becomes a submodule of the new repository (`.gitmodules` with `path = third_party/hunspell`).
-- editors-android takes the new repository as a submodule at `engine/`, so `libeditors` (`path("../engine/CMakeLists.txt")`) and AndroidEditors' scripts keep their paths.
-- The JNI binding (`src/jni/`) can stay in the engine repository behind `if(ANDROID)`, or move to `libeditors`.
+`tests/` has regression tests: scripts that run on document-templates' samples with `eo-render` and check the results (`lib.js` has the assertions). `tests/run.sh` runs them; how to build `eo-render` for the host is in MobileEditors' `build/scripts/engine-host.sh`.
 
 ## Co-editing
 
@@ -119,9 +106,9 @@ Documents, presentations and spreadsheets of an integration (Nextcloud with the 
 `tools/coedit/check.mjs` checks all this on the host: the engine (`eo-render` with `EO_REPL=1`, one script per line, `engine.mjs`) and a web editor (Playwright, `web.mjs`) edit a document together, both ways: text, pictures, comments, others' cursors and selections, others' locks framed in red (`!render <page> <png>` in the REPL draws a page and counts the lock's red), a viewer that gets the changes as they come (a second engine) and a connection that drops for good; then the document the Document Server saved must have both's edits. A small storage (`storage.mjs`) stands in for the integration: it serves the documents, signs editor configurations with the server's secret and takes the server's callback. With a Document Server on port 8090 (for example the development environment of DocumentServer) that reaches this machine at `<host>`:
 
 ```sh
-cd editors-android/engine/tools/coedit && npm ci && npx playwright install chromium && cd -
+cd editors-engine/tools/coedit && npm ci && npx playwright install chromium && cd -
 export RUN_ENGINE="docker run -i --rm --network host --user $(id -u):$(id -g) -v $PWD:/src -w /src -e LD_LIBRARY_PATH=/src/build/work/host/package -e EO_REPL=1 eo-core-base:desktop build/work/host/engine/eo-render build/work/host/package {doc} build/work/coedit/engine 1"
-node editors-android/engine/tools/coedit/check.mjs --document-server http://localhost:8090 --secret <JWT secret> \
+node editors-engine/tools/coedit/check.mjs --document-server http://localhost:8090 --secret <JWT secret> \
     --storage-url http://<host>:8095 document-templates/sample/sample.docx document-templates/sample/sample.pptx document-templates/sample/sample.xlsx
 ```
 

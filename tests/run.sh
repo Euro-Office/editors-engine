@@ -1,10 +1,10 @@
 #!/bin/sh
 # Engine regression tests: runs each test script on its document with eo-render and reads its
-# result ("PASS <count>" or "FAIL <messages>", see lib.js). Run from the AndroidEditors root:
+# result ("PASS <count>" or "FAIL <messages>", see lib.js). Run from the MobileEditors root:
 #
-#   editors-android/engine/tests/run.sh <eo-render> <runtime dir> [test.js ...]
+#   editors-engine/tests/run.sh <eo-render> <runtime dir> [test.js ...]
 #
-# A test names its document (relative to the AndroidEditors root) in a "// document:" line. With a
+# A test names its document (relative to the MobileEditors root) in a "// document:" line. With a
 # "// save:" line the document is saved after the test and opened again for <test>.reopen.js.
 # Output files go to $OUT_DIR (build/work/engine-tests).
 set -u

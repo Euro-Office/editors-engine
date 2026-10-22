@@ -1,9 +1,10 @@
 # Euro-Office editor engine: sdkjs in core's doctrenderer (V8), page tiles via
 # core's graphics engine. Builds against core's headers and its prebuilt
-# libraries for the target platform:
+# libraries for the target platform. The apps add their bindings to the
+# eoengine target (add_subdirectory, then target_sources):
 #
-#   Android: the libeditors Gradle module, with the core-android libraries
-#   Desktop: cmake -S engine -B build -DCORE_SOURCE_DIR=... -DCORE_LIBS_DIR=... -DEO_ENGINE_TOOLS=ON
+#   Android: editors-android's libeditors (JNI), with the core-android libraries
+#   Desktop: cmake -S editors-engine -B build -DCORE_SOURCE_DIR=... -DCORE_LIBS_DIR=... -DEO_ENGINE_TOOLS=ON
 cmake_minimum_required(VERSION 3.22)
 project(eo_editors_engine CXX)
 
@@ -62,12 +63,6 @@ target_include_directories(eoengine
 target_compile_definitions(eoengine PRIVATE LINUX _LINUX)
 target_link_libraries(eoengine PRIVATE ${CORE_LIBRARY_FILES} hunspell)
 set_target_properties(eoengine PROPERTIES BUILD_RPATH "\$ORIGIN" INSTALL_RPATH "\$ORIGIN")
-
-if(ANDROID)
-    # JNI binding for libeditors (lib.editors.base.engine.NativeEngine)
-    target_sources(eoengine PRIVATE src/jni/DocumentJni.cpp src/jni/SpellerJni.cpp)
-    target_link_libraries(eoengine PRIVATE jnigraphics log)
-endif()
 
 if(EO_ENGINE_TOOLS)
     add_executable(eo-render tools/render.cpp)
