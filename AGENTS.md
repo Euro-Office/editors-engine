@@ -20,12 +20,13 @@ editors-engine is the engine of the Euro-Office mobile editors: C++ that runs cu
 
 ## Build and test
 
-From the MobileEditors checkout (see its `build/README.md`):
+`.docker/editors-engine.bake.Dockerfile` builds the engine for the host with `eo-render` (`engine-host`) and runs the tests (`engine-tests`). From the MobileEditors checkout (see its `build/README.md`):
 
 ```sh
-docker run --rm -v "$PWD":/src -w /src -e CORE_PREBUILT=1 eo-core-base:desktop build/scripts/engine-host.sh
-docker run --rm -v "$PWD":/src -w /src -e LD_LIBRARY_PATH=/src/build/work/host/package eo-core-base:desktop \
-    editors-engine/tests/run.sh build/work/host/engine/eo-render build/work/host/package
+cd build && docker buildx bake --allow=fs.read=.. engine-tests     # result in build/out/engine-tests
+docker buildx bake --allow=fs.read=.. engine-host --load            # for running tests or eo-render from the checkout:
+cd .. && docker run --rm -v "$PWD":/src -w /src ghcr.io/euro-office/editors-engine-host \
+    editors-engine/tests/run.sh /engine/eo-render /package/bin
 ```
 
 ## Commits

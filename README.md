@@ -90,7 +90,7 @@ PDFs (other than ONLYOFFICE's forms, which docbuilder opens in the document edit
 
 ## Tests
 
-`tests/` has regression tests: scripts that run on document-templates' samples with `eo-render` and check the results (`lib.js` has the assertions). `tests/run.sh` runs them; how to build `eo-render` for the host is in MobileEditors' `build/scripts/engine-host.sh`.
+`tests/` has regression tests: scripts that run on document-templates' samples with `eo-render` and check the results (`lib.js` has the assertions). `tests/run.sh` runs them; `eo-render` is built for the host by `.docker/editors-engine.bake.Dockerfile` (stage `engine-host`; MobileEditors' bake target `engine-host`).
 
 ## Co-editing
 
@@ -107,7 +107,7 @@ Documents, presentations and spreadsheets of an integration (Nextcloud with the 
 
 ```sh
 cd editors-engine/tools/coedit && npm ci && npx playwright install chromium && cd -
-export RUN_ENGINE="docker run -i --rm --network host --user $(id -u):$(id -g) -v $PWD:/src -w /src -e LD_LIBRARY_PATH=/src/build/work/host/package -e EO_REPL=1 eo-core-base:desktop build/work/host/engine/eo-render build/work/host/package {doc} build/work/coedit/engine 1"
+export RUN_ENGINE="docker run -i --rm --network host --user $(id -u):$(id -g) -v $PWD:/src -w /src -e EO_REPL=1 ghcr.io/euro-office/editors-engine-host eo-render /package/bin {doc} build/work/coedit/engine 1"
 node editors-engine/tools/coedit/check.mjs --document-server http://localhost:8090 --secret <JWT secret> \
     --storage-url http://<host>:8095 document-templates/sample/sample.docx document-templates/sample/sample.pptx document-templates/sample/sample.xlsx
 ```
