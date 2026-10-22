@@ -563,9 +563,12 @@ function pdfEngine(api) {
 	});
 	wrap("SetTargetSize", updateCursor);
 	wrap("UpdateTargetTransform", updateCursor);
-	wrap("TargetShow", function () {
-		cursorVisible = true;
-		updateCursor();
+	// Shown: TargetShow (as in the document editor), TargetStart (the PDF editor's)
+	["TargetShow", "TargetStart"].forEach(function (name) {
+		wrap(name, function () {
+			cursorVisible = true;
+			updateCursor();
+		});
 	});
 	wrap("TargetEnd", function () {
 		cursorVisible = false;
@@ -666,6 +669,12 @@ function pdfEngine(api) {
 	};
 
 	engine["getState"] = function () {
+		// The cursor, as the viewer places it when it paints (see stopPainting), in text laid
+		// out as when it is drawn
+		var textController = doc.getTextController();
+		if (textController && textController.IsNeedRecalc && textController.IsNeedRecalc() && textController.Recalculate)
+			textController.Recalculate();
+		viewer._checkTargetUpdate();
 		collectDirtyPages();
 		state["selection"] = textSelection().concat(textBoxSelection(), search ? searchMatch : []);
 		state["drawings"] = drawingFrames();
