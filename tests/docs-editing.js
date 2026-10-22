@@ -30,7 +30,7 @@ t.run("mouse", function () {
 	t.ok("Shift+click extends the selection", t.state()["selection"].length > 0);
 });
 t.run("adds a text box", function () {
-	eoEngine.insertShape("textRect");
+	eoEngine.insertTextBox(0, 100, 100);
 	eoEngine.enterText("A text box");
 	t.ok("the text in it", Asc.editor.WordControl.m_oLogicDocument.GetAllDrawingObjects().some(function (drawing) {
 		var content = drawing.GraphicObj.getDocContent && drawing.GraphicObj.getDocContent();

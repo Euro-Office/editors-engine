@@ -2065,6 +2065,29 @@ window["eoStartEngine"] = function () {
 		api.AddImageUrlAction(name);
 	};
 
+	// A text box taking the typing. Presentations: centered on (x, y) of the slide (mm), 60 % of
+	// its width, its height fitting its text (sdkjs adds shapes at a place and size of its own,
+	// small and mostly over the title); documents: as sdkjs adds it at the cursor
+	engine["insertTextBox"] = function (page, x, y) {
+		if (!isPresentation) {
+			engine["insertShape"]("textRect");
+			return;
+		}
+		engine["finishComposingText"]();
+		api.AddShapeOnCurrentPage("textRect");
+		var width = logicDocument.GetWidthMM() * 0.6, height = 20;
+		if (page !== logicDocument.CurPage) {
+			x = logicDocument.GetWidthMM() / 2;
+			y = logicDocument.GetHeightMM() / 2;
+		}
+		var properties = new Asc.asc_CImgProperty();
+		properties.asc_putWidth(width);
+		properties.asc_putHeight(height);
+		properties.asc_putPosition(new Asc.CPosition({ "X": x - width / 2, "Y": y - height / 2 }));
+		api.ImgApply(properties);
+		state["dirtyPages"][logicDocument.CurPage] = true;
+	};
+
 	// A shape (preset name like "rect", "ellipse", "rightArrow", "line") in the middle of the
 	// current page or slide, selected
 	engine["insertShape"] = function (preset) {

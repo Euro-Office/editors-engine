@@ -13,7 +13,11 @@ t.run("slides", function () {
 	t.ok("text on slide 1", JSON.parse(eoEngine.textBlocks(0)).length > 0);
 });
 t.run("adds a text box", function () {
-	eoEngine.insertShape("textRect");
+	eoEngine.gotoSlide(0);
+	var presentation = Asc.editor.WordControl.m_oLogicDocument;
+	eoEngine.insertTextBox(presentation.CurPage, 100, 60);
+	var box = presentation.GetCurrentController().getSelectedArray()[0];
+	t.ok("centered on the point", box && Math.abs(box.x + box.extX / 2 - 100) < 1 && Math.abs(box.y + box.extY / 2 - 60) < 10);
 	eoEngine.enterText("A text box");
 	t.ok("the text in it", Asc.editor.WordControl.m_oLogicDocument.Slides.some(function (slide) {
 		return slide.cSld.spTree.some(function (shape) {
