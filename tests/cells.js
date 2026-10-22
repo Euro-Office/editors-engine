@@ -32,6 +32,11 @@ t.run("formats a selected chart's text", function () {
 t.run("titles a chart and gives it cells", function () {
 	eoEngine.setChartTitles("Answers", "", "");
 	t.eq("title", eoEngine.chartState().titleText, "Answers");
+	t.ok("style pictures", JSON.parse(eoEngine.previews("chartStyles")).length > 1);
+	eoEngine.setChartStyle(2);
+	t.eq("a style", eoEngine.chartState().style, 2);
+	eoEngine.setChartLayout({ "legend": Asc.c_oAscChartLegendShowSettings.left });
+	t.eq("its legend", eoEngine.chartState().layout.legend, Asc.c_oAscChartLegendShowSettings.left);
 	eoEngine.startChartRange();
 	t.eq("cells are selected meanwhile", t.state().drawings.length, 0);
 	eoEngine.selectCells(0, 0, 0, 2);

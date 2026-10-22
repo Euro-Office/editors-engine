@@ -296,6 +296,46 @@ function drawingColorsJson(selected) {
 	});
 }
 
+// Pictures of choices (chart styles, table styles, slide layouts), drawn as pages with negative
+// numbers: previews(kind) lists them as [{id, name, width, height}] (sizes in mm) and
+// drawTile(-1 - i, ...) draws the ith (getPageWidth and getPageHeight give its size).
+// kinds: kind -> [{id, name, width, height, draw(graphics)}]. Returns {draw(index, ...), size(index)}
+function previewCommands(engine, resources, kinds) {
+	var items = [];
+	engine["previews"] = function (kind) {
+		items = kinds[kind] ? kinds[kind]() : [];
+		return JSON.stringify(items.map(function (item) {
+			return { "id": item.id, "name": item.name, "width": item.width, "height": item.height };
+		}));
+	};
+	function size(index) {
+		var item = items[index];
+		return item ? [item.width, item.height] : [1, 1];
+	}
+	// Draws the area (x, y, width, height) of preview index rendered at pageWidth x pageHeight pixels
+	function draw(index, pageWidth, pageHeight, x, y, width, height) {
+		var item = items[index];
+		var g = engine["tile"];
+		try {
+			if (!item)
+				return false;
+			g.width = width;
+			g.height = height;
+			g.create(resources, width, height, width * item.width / pageWidth, height * item.height / pageHeight);
+			g.CoordTransformOffset(-x, -y);
+			g.transform(1, 0, 0, 1, 0, 0);
+			g.b_color1(255, 255, 255, 255);
+			g._s(); g._m(0, 0); g._l(item.width, 0); g._l(item.width, item.height); g._l(0, item.height); g._z(); g.df();
+			AscFormat.ExecuteNoHistory(function () { item.draw(g); }, this, []);
+			return true;
+		} finally {
+			g.Native["Destroy"]();
+			engine["tile"] = null;
+		}
+	}
+	return { draw: draw, size: size };
+}
+
 // Charts, the same in all editors. options: selectedDrawings() as in the editors, insert(type),
 // action(name, change) for one undo step that redraws, sheet: data comes from cells
 function chartCommands(engine, api, options) {
@@ -309,7 +349,25 @@ function chartCommands(engine, api, options) {
 		return null;
 	}
 	// The settings of the selected chart; true: without opening the "frame editor", which stops saving
-	function settings() { return api.asc_getChartSettings(true); }
+	function settings() {
+		loadChartStyles();
+		return api.asc_getChartSettings(true);
+	}
+
+	// The chart styles (AscCommon.g_oChartStyles), which the web editor loads as a script of its
+	// own (ChartStyles.js, with sdkjs' files here): read once a chart is edited
+	function loadChartStyles() {
+		var styles = AscCommon.g_oChartStyles;
+		if (styles && styles[Asc.c_oAscChartTypeSettings.barNormal])
+			return;
+		var bytes = window["native"]["GetFileBinary"](window["native"]["GetFontsDirectory"]() + "/Charts/ChartStyles.js");
+		if (!bytes || !bytes.length)
+			return;
+		var text = "";
+		for (var i = 0; i < bytes.length; i += 8192)
+			text += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+		new Function(text)();
+	}
 
 	// Asc.c_oAscChartTypeSettings
 	engine["insertChart"] = function (type) { options.insert(type); };
@@ -344,6 +402,7 @@ function chartCommands(engine, api, options) {
 		var chart = selectedChart();
 		if (!chart)
 			return null;
+		loadChartStyles();
 		var current = chart.getAscSettings();
 		var axis = axes(chart);
 		return {
@@ -358,9 +417,169 @@ function chartCommands(engine, api, options) {
 			"legend": current.getLegendPos(),
 			"labels": !!current.getShowVal(),
 			"gridlines": current.getVertGridLines() !== Asc.c_oAscGridLinesSettings.none || current.getHorGridLines() !== Asc.c_oAscGridLinesSettings.none,
-			"dataInCells": !!options.sheet
+			"dataInCells": !!options.sheet,
+			// Its style (1-based, null if none of the type's) and how many the type has
+			"style": current.getStyle(),
+			"styles": (AscCommon.g_oChartStyles[current.getType()] || []).length,
+			"layout": layoutJson(current),
+			"valueAxis": axisJson(chartAxes(current).value),
+			"categoryAxis": axisJson(chartAxes(current).category)
 		};
 	};
+
+	// The chart's value axis and category axis (asc_ValAxisSettings, asc_CatAxisSettings), as
+	// the web editor finds them: vertical, horizontal for horizontal bars; null without one
+	// (pies). put(settings, axis) gives settings the changed axis.
+	function chartAxes(current) {
+		var vertical = current.getVertAxisProps(), horizontal = current.getHorAxisProps();
+		var isValue = function (axis) { return axis && axis.getAxisType() === Asc.c_oAscAxisType.val; };
+		var isCategory = function (axis) { return axis && axis.getAxisType() !== Asc.c_oAscAxisType.val; };
+		var put = function (axis) {
+			return function (settings, changed) {
+				if (axis === vertical)
+					settings.putVertAxisProps(changed);
+				else
+					settings.putHorAxisProps(changed);
+			};
+		};
+		if (isValue(vertical))
+			return { value: vertical, category: isCategory(horizontal) ? horizontal : null, putValue: put(vertical), putCategory: put(horizontal) };
+		if (isValue(horizontal))
+			return { value: horizontal, category: isCategory(vertical) ? vertical : null, putValue: put(horizontal), putCategory: put(vertical) };
+		return { value: null, category: null };
+	}
+
+	// Asc.c_oAscChartTitleShowSettings, c_oAscChartLegendShowSettings,
+	// c_oAscChartHorAxisLabelShowSettings, c_oAscChartVertAxisLabelShowSettings,
+	// c_oAscGridLinesSettings, c_oAscChartDataLabelsPos; axes' settings null without the axis
+	function layoutJson(current) {
+		var horizontal = current.getHorAxisProps(), vertical = current.getVertAxisProps();
+		return {
+			"title": current.getTitle(),
+			"legend": current.getLegendPos(),
+			"horizontalTitle": horizontal ? horizontal.getLabel() : null,
+			"verticalTitle": vertical ? vertical.getLabel() : null,
+			"horizontalGridlines": vertical ? vertical.getGridlines() : null,
+			"verticalGridlines": horizontal ? horizontal.getGridlines() : null,
+			"dataLabels": current.getDataLabelsPos()
+		};
+	}
+
+	// An axis' settings: min and max (null: automatic), units (Asc.c_oAscValAxUnits), crosses
+	// (Asc.c_oAscCrossesRule) at crossesValue, majorTicks and minorTicks (Asc.c_oAscTickMark),
+	// labels (Asc.c_oAscTickLabelsPos), reverse; category axes position (Asc.c_oAscLabelsPosition)
+	// instead of min, max and units
+	function axisJson(axis) {
+		if (!axis)
+			return null;
+		var value = axis.getAxisType() === Asc.c_oAscAxisType.val;
+		var result = {
+			"crosses": axis.getCrossesRule(),
+			"crossesValue": axis.getCrosses(),
+			"majorTicks": axis.getMajorTickMark(),
+			"minorTicks": axis.getMinorTickMark(),
+			"labels": axis.getTickLabelsPos(),
+			"reverse": !!(value ? axis.getInvertValOrder() : axis.getInvertCatOrder())
+		};
+		if (value) {
+			result["min"] = axis.getMinValRule() === Asc.c_oAscValAxisRule.fixed ? axis.getMinVal() : null;
+			result["max"] = axis.getMaxValRule() === Asc.c_oAscValAxisRule.fixed ? axis.getMaxVal() : null;
+			result["units"] = axis.getDispUnitsRule();
+		} else {
+			result["position"] = axis.getLabelsPosition();
+		}
+		return result;
+	}
+
+	// The selected chart's style, 1 to the type's count, in one undo step
+	engine["setChartStyle"] = function (style) {
+		var changed = settings();
+		changed.startEdit();
+		changed.putStyle(style);
+		changed.endEdit();
+	};
+
+	// Settings of the layout, as in layoutJson: {name: value} of those to change
+	engine["setChartLayout"] = function (layout) {
+		var changed = settings();
+		var horizontal = changed.getHorAxisProps(), vertical = changed.getVertAxisProps();
+		Object.keys(layout).forEach(function (name) {
+			var value = layout[name];
+			switch (name) {
+				case "title": changed.putTitle(value); break;
+				case "legend": changed.putLegendPos(value); break;
+				// sdkjs' putVertAxisLabel doesn't set it: the axes' settings do
+				case "horizontalTitle": if (horizontal) horizontal.putLabel(value); break;
+				case "verticalTitle": if (vertical) vertical.putLabel(value); break;
+				case "horizontalGridlines": if (vertical) vertical.putGridlines(value); break;
+				case "verticalGridlines": if (horizontal) horizontal.putGridlines(value); break;
+				case "dataLabels":
+					changed.putDataLabelsPos(value);
+					changed.putShowVal(value !== Asc.c_oAscChartDataLabelsPos.none);
+					break;
+			}
+		});
+		api.asc_applyChartSettings(changed);
+	};
+
+	// Settings of the value or category axis (kind "value", "category"), as in axisJson:
+	// {name: value} of those to change
+	engine["setChartAxis"] = function (kind, values) {
+		var changed = settings();
+		var found = chartAxes(changed);
+		var axis = kind === "value" ? found.value : found.category;
+		if (!axis)
+			return;
+		var value = kind === "value";
+		Object.keys(values).forEach(function (name) {
+			var v = values[name];
+			switch (name) {
+				case "min":
+				case "max":
+					var rule = v === null ? Asc.c_oAscValAxisRule.auto : Asc.c_oAscValAxisRule.fixed;
+					if (name === "min") {
+						axis.putMinValRule(rule);
+						if (v !== null) axis.putMinVal(v);
+					} else {
+						axis.putMaxValRule(rule);
+						if (v !== null) axis.putMaxVal(v);
+					}
+					break;
+				case "units": axis.putDispUnitsRule(v); break;
+				case "crosses": axis.putCrossesRule(v); break;
+				case "crossesValue":
+					axis.putCrossesRule(Asc.c_oAscCrossesRule.value);
+					axis.putCrosses(v);
+					break;
+				case "majorTicks": axis.putMajorTickMark(v); break;
+				case "minorTicks": axis.putMinorTickMark(v); break;
+				case "labels": axis.putTickLabelsPos(v); break;
+				case "position": axis.putLabelsPosition(v); break;
+				case "reverse":
+					if (value) axis.putInvertValOrder(v); else axis.putInvertCatOrder(v);
+					break;
+			}
+		});
+		(value ? found.putValue : found.putCategory)(changed, axis);
+		api.asc_applyChartSettings(changed);
+	};
+
+	// Pictures of the selected chart's type in its styles, with sdkjs' sample data
+	if (options.previews) {
+		options.previews["chartStyles"] = function () {
+			var chart = selectedChart();
+			loadChartStyles();
+			var type = chart ? chart.getAscSettings().getType() : -1;
+			var styles = AscCommon.g_oChartStyles[type] || [];
+			var manager = api.chartPreviewManager;
+			return styles.map(function (style, i) {
+				return {
+					id: i + 1, name: String(i + 1), width: 75, height: 75,
+					draw: function (g) { manager.createChartPreview(g, type, style); }
+				};
+			});
+		};
+	}
 
 	// As the web editor: changed on the chart itself, in one undo step
 	engine["setChartType"] = function (type) {
@@ -1197,11 +1416,11 @@ window["eoStartEngine"] = function () {
 	};
 
 	engine["getPageWidth"] = function (page) {
-		return editor.pageWidth(page);
+		return page < 0 ? previews.size(-1 - page)[0] : editor.pageWidth(page);
 	};
 
 	engine["getPageHeight"] = function (page) {
-		return editor.pageHeight(page);
+		return page < 0 ? previews.size(-1 - page)[1] : editor.pageHeight(page);
 	};
 
 	engine["beginTile"] = function () {
@@ -1209,7 +1428,12 @@ window["eoStartEngine"] = function () {
 	};
 
 	// Draws the area (x, y, width, height) of a page rendered at pageWidth x pageHeight pixels
+	var previewKinds = {};
+	var previews = previewCommands(engine, resources, previewKinds);
+
 	engine["drawTile"] = function (page, pageWidth, pageHeight, x, y, width, height) {
+		if (page < 0)
+			return previews.draw(-1 - page, pageWidth, pageHeight, x, y, width, height);
 		var widthMm = editor.pageWidth(page);
 		var heightMm = editor.pageHeight(page);
 		var mmPerPixelX = widthMm / pageWidth;
@@ -1807,7 +2031,29 @@ window["eoStartEngine"] = function () {
 		return null;
 	}
 
-	engine["insertTable"] = function (cols, rows) { api.put_Table(cols, rows); };
+	// styleId: a table style's id (previews("tableStyles")), or the default style
+	engine["insertTable"] = function (cols, rows, styleId) {
+		if (isPresentation)
+			api.put_Table(cols, rows, undefined, styleId || undefined);
+		else
+			api.put_Table(cols, rows, styleId || undefined);
+	};
+	engine["setTableStyle"] = function (styleId) {
+		var properties = new Asc.CTableProp();
+		properties.put_TableStyle(styleId);
+		api.tblApply(properties);
+	};
+	// Pictures of the table styles, a table of 5 x 5 cells as the web editor shows them
+	previewKinds["tableStyles"] = function () {
+		var generator = new AscCommon.CTableStylesPreviewGenerator(logicDocument);
+		generator.TableLook = logicDocument.GetDrawingDocument().GetTableLook(true);
+		return logicDocument.GetAllTableStyles().map(function (style) {
+			return {
+				id: style.GetId(), name: style.GetName(), width: 297, height: 210,
+				draw: function (g) { generator.DrawTable(g, generator.GetTable(style)); }
+			};
+		});
+	};
 	var tableActions = {
 		"rowAbove": function () { api.addRowAbove(1); },
 		"rowBelow": function () { api.addRowBelow(1); },
@@ -2342,9 +2588,10 @@ window["eoStartEngine"] = function () {
 			logicDocument.StartAction(isPresentation ? AscDFH.historydescription_Presentation_EditChart : AscDFH.historydescription_Document_EditChart);
 			change();
 			logicDocument.FinalizeAction();
-		}
+		},
+		previews: previewKinds
 	});
-	["setChartType", "setChartElements", "setChartData", "setChartTitles"].forEach(function (name) {
+	["setChartType", "setChartElements", "setChartData", "setChartTitles", "setChartStyle", "setChartLayout", "setChartAxis"].forEach(function (name) {
 		engine[name] = drawingCommand(engine[name]);
 	});
 	engine["drawingColors"] = function () { return drawingColorsJson(editor.selectedDrawings()); };
@@ -2455,6 +2702,52 @@ window["eoStartEngine"] = function () {
 		}));
 	};
 	engine["addSlideWithLayout"] = function (layoutIndex) { api.AddSlide(layoutIndex); };
+	// Pictures of the layouts (getLayouts), as the web editor shows them: background, the
+	// master's shapes and the placeholders' frames
+	previewKinds["layouts"] = function () {
+		var all = logicDocument.GetAllLayouts();
+		var master = logicDocument.getLayoutsMasterSlide ? logicDocument.getLayoutsMasterSlide() : null;
+		var width = logicDocument.GetWidthMM(), height = logicDocument.GetHeightMM();
+		return (master ? master.sldLayoutLst : all).map(function (layout) {
+			return {
+				id: all.indexOf(layout), name: layout.getName() || "", width: width, height: height,
+				draw: function (g) {
+					layout.drawNoPlaceholders(g);
+					// The placeholders' frames, without the dates, footers and numbers
+					var skipped = [AscFormat.phType_dt, AscFormat.phType_ftr, AscFormat.phType_hdr, AscFormat.phType_sldNum];
+					layout.cSld.spTree.forEach(function (shape) {
+						if (!shape.isPlaceholder || !shape.isPlaceholder() || AscCommon.IsHiddenObj(shape) ||
+							skipped.indexOf(shape.getPlaceholderType()) >= 0 || !shape.transform)
+							return;
+						var m = shape.transform;
+						var corners = [[0, 0], [shape.extX, 0], [shape.extX, shape.extY], [0, shape.extY]];
+						g.p_width(2500);
+						g.p_color(128, 128, 128, 255);
+						g._s();
+						corners.forEach(function (c, i) {
+							var x = m.TransformPointX(c[0], c[1]), y = m.TransformPointY(c[0], c[1]);
+							if (i === 0) g._m(x, y); else g._l(x, y);
+						});
+						g._z();
+						g.ds();
+						g._e();
+					});
+				}
+			};
+		});
+	};
+	// The current slide's background: a color "RRGGBB"; getSlideBackground: its color, "" for
+	// none, null for other fills (pictures, gradients, from the layout)
+	engine["setSlideBackground"] = function (hex) {
+		var properties = new Asc.CAscSlideProps();
+		properties.put_background(shapeFill(hex).asc_getFill());
+		api.SetSlideProps(properties);
+		allPagesChanged();
+	};
+	engine["getSlideBackground"] = function () {
+		var slide = logicDocument.Slides[logicDocument.CurPage];
+		return JSON.stringify(slide && slide.backgroundFill ? uniFillHex(slide.backgroundFill) : null);
+	};
 	engine["setLayout"] = function (layoutIndex) {
 		api.ChangeLayout(layoutIndex);
 		allPagesChanged();
@@ -2721,8 +3014,8 @@ function spreadsheetEngine(window, api) {
 
 	engine["tile"] = null;
 	engine["getPageCount"] = function () { return 1; };
-	engine["getPageWidth"] = function () { return geometry.cols[geometry.cols.length - 1]; };
-	engine["getPageHeight"] = function () { return geometry.rows[geometry.rows.length - 1]; };
+	engine["getPageWidth"] = function (page) { return page < 0 ? previews.size(-1 - page)[0] : geometry.cols[geometry.cols.length - 1]; };
+	engine["getPageHeight"] = function (page) { return page < 0 ? previews.size(-1 - page)[1] : geometry.rows[geometry.rows.length - 1]; };
 	engine["beginTile"] = function () {
 		engine["tile"] = new AscCommon.CNativeGraphics();
 	};
@@ -2740,7 +3033,12 @@ function spreadsheetEngine(window, api) {
 		return low;
 	}
 
+	var previewKinds = {};
+	var previews = previewCommands(engine, resources, previewKinds);
+
 	engine["drawTile"] = function (page, pageWidth, pageHeight, x, y, width, height) {
+		if (page < 0)
+			return previews.draw(-1 - page, pageWidth, pageHeight, x, y, width, height);
 		var widthMm = engine["getPageWidth"](), heightMm = engine["getPageHeight"]();
 		var mmPerPixel = widthMm / pageWidth;
 		var g = engine["tile"];
@@ -2886,9 +3184,11 @@ function spreadsheetEngine(window, api) {
 		// One undo step, once the chart is locked
 		action: function (change) {
 			drawingController().checkSelectedObjectsAndCallback(change, [], false, AscDFH.historydescription_Spreadsheet_EditChart);
-		}
+		},
+		previews: previewKinds
 	});
-	["insertChart", "setChartType", "setChartElements", "setChartTitles", "setChartRange", "switchChartRowCol", "startChartRange", "endChartRange"].forEach(function (name) {
+	["insertChart", "setChartType", "setChartElements", "setChartTitles", "setChartRange", "switchChartRowCol", "startChartRange", "endChartRange",
+		"setChartStyle", "setChartLayout", "setChartAxis"].forEach(function (name) {
 		engine[name] = edit(engine[name]);
 	});
 	engine["drawingColors"] = function () { return drawingColorsJson(selectedDrawings()); };

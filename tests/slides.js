@@ -46,6 +46,42 @@ t.run("titles a chart, reads its colors", function () {
 	eoEngine.setShapeFill("FFEECC");
 	t.eq("its fill", JSON.parse(eoEngine.drawingColors()).fill, "FFEECC");
 });
+t.run("styles and lays out a chart, sets its axes", function () {
+	var chart = eoEngine.chartState();
+	t.ok("styles of its type", chart.styles > 1);
+	t.eq("previews of them", JSON.parse(eoEngine.previews("chartStyles")).length, chart.styles);
+	eoEngine.setChartStyle(3);
+	t.eq("style", eoEngine.chartState().style, 3);
+	eoEngine.setChartLayout({ "legend": Asc.c_oAscChartLegendShowSettings.top, "verticalTitle": Asc.c_oAscChartVertAxisLabelShowSettings.horizontal,
+		"horizontalGridlines": Asc.c_oAscGridLinesSettings.majorMinor });
+	var layout = eoEngine.chartState().layout;
+	t.eq("legend", layout.legend, Asc.c_oAscChartLegendShowSettings.top);
+	t.eq("vertical axis' title", layout.verticalTitle, Asc.c_oAscChartVertAxisLabelShowSettings.horizontal);
+	t.eq("gridlines", layout.horizontalGridlines, Asc.c_oAscGridLinesSettings.majorMinor);
+	eoEngine.setChartAxis("value", { "min": 0, "max": 500, "units": Asc.c_oAscValAxUnits.HUNDREDS });
+	var axis = eoEngine.chartState().valueAxis;
+	t.eq("minimum", axis.min, 0);
+	t.eq("maximum", axis.max, 500);
+	t.eq("units", axis.units, Asc.c_oAscValAxUnits.HUNDREDS);
+	eoEngine.setChartAxis("value", { "max": null });
+	t.eq("automatic maximum", eoEngine.chartState().valueAxis.max, null);
+	eoEngine.setChartAxis("category", { "reverse": true });
+	t.ok("reversed categories", eoEngine.chartState().categoryAxis.reverse);
+});
+t.run("slide layouts, table styles and the background", function () {
+	var layouts = JSON.parse(eoEngine.previews("layouts"));
+	t.eq("a picture per layout", layouts.length, JSON.parse(eoEngine.getLayouts()).length);
+	var styles = JSON.parse(eoEngine.previews("tableStyles"));
+	t.ok("table styles", styles.length > 10);
+	click(0, 5, 5);
+	eoEngine.insertTable(3, 2, styles[5].id);
+	var table = Asc.editor.WordControl.m_oLogicDocument.GetCurrentController().getSelectedArray()[0];
+	t.eq("a table of the style", table && table.graphicObject.TableStyle, styles[5].id);
+	eoEngine.undo();
+	eoEngine.setSlideBackground("FF0000");
+	t.eq("background", JSON.parse(eoEngine.getSlideBackground()), "FF0000");
+	eoEngine.undo();
+});
 t.run("copies and pastes a text box", function () {
 	var presentation = Asc.editor.WordControl.m_oLogicDocument;
 	eoEngine.gotoSlide(0);
