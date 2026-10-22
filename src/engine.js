@@ -884,9 +884,31 @@ function coEditingCommands(engine, api, repaint, repaintOnMessages) {
 			"reconnecting": co.reconnecting,
 			"disconnected": co.disconnected,
 			"participants": co.participants,
-			"cursors": cursors
+			"cursors": cursors,
+			"selections": foreignSelections(colors)
 		};
 	};
+
+	// Spreadsheets: the cells others selected on the active sheet ({user, name, color, editing,
+	// ranges: [[c1, r1, c2, r2]]}), which the web editor frames in their color
+	function foreignSelections(users) {
+		var collaborative = isSpreadsheet && api.collaborativeEditing;
+		if (!collaborative || !api.wbModel)
+			return [];
+		var sheetId = api.wbModel.getActiveWs().getId();
+		var data = collaborative.m_aForeignCursorsData;
+		return Object.keys(data).filter(function (id) {
+			return data[id] && data[id].sheetId === sheetId && data[id].ranges;
+		}).map(function (id) {
+			var selection = data[id];
+			var user = users[id];
+			return {
+				"user": id, "name": user ? user.name : "", "editing": !!selection.isEdit,
+				"color": user ? user.color : "#" + ("000000" + AscCommon.getUserColorById(selection.shortId, null, true, true).toString(16)).substr(-6),
+				"ranges": selection.ranges.map(function (range) { return [range.c1, range.r1, range.c2, range.r2]; })
+			};
+		});
+	}
 }
 
 // Starts the engine on sdkjs' current document (again after co-editing loaded the server's)
@@ -2407,6 +2429,9 @@ function spreadsheetEngine(window, api) {
 
 	api.asc_SetSilentMode(false);
 	AscCommon.History.TurnOnChanges();
+	// The sheet shown, as the web editor's page shows it (others learn the selection's sheet from it)
+	if (api.wb.wsActive === -1)
+		api.wb.wsActive = api.wbModel.getActive();
 	// Calculates the view: column widths, row heights, charts and other drawings
 	api.asc_nativeCalculateFile();
 	AscCommon.g_specialPasteHelper.Init(api);
