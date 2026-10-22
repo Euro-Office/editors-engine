@@ -633,6 +633,25 @@ function pdfEngine(api) {
 		});
 	}
 
+	// Frames of the selected objects: shapes (pictures, shape annotations) as in the other
+	// editors; other annotations (notes, markups) by their rectangle, without handles
+	function drawingFrames() {
+		var selected = selectedDrawings();
+		var shapes = selected.filter(function (item) { return item.drawing.transform; });
+		var frames = drawingStates(shapes, doc.GetController());
+		selected.forEach(function (item) {
+			if (item.drawing.transform || !item.drawing.GetRect)
+				return;
+			var rect = item.drawing.GetRect();
+			var points = [];
+			[[rect[0], rect[1]], [rect[2], rect[1]], [rect[2], rect[3]], [rect[0], rect[3]]].forEach(function (corner) {
+				points = points.concat(fromPage(item.page, corner[0], corner[1]));
+			});
+			frames.push({ "page": item.page, "points": points, "canMove": true, "canResize": false });
+		});
+		return frames;
+	}
+
 	["asc_onCanUndo", "asc_onCanRedo", "asc_onDocumentModifiedChanged"].forEach(function (name) {
 		api.asc_registerCallback(name, function (value) {
 			state["interface"][name.substring("asc_on".length)] = value;
@@ -649,7 +668,7 @@ function pdfEngine(api) {
 	engine["getState"] = function () {
 		collectDirtyPages();
 		state["selection"] = textSelection().concat(textBoxSelection(), search ? searchMatch : []);
-		state["drawings"] = drawingStates(selectedDrawings(), doc.GetController());
+		state["drawings"] = drawingFrames();
 		state["modified"] = api.isDocumentModified();
 		state["interface"]["CanUndo"] = doc.History.Can_Undo();
 		state["interface"]["CanRedo"] = doc.History.Can_Redo();
