@@ -4,6 +4,8 @@
 #include "engine_js.h"
 #include "pdf_js.h"
 
+#include "Common/OfficeFileErrorDescription.h"
+#include "Common/OfficeFileFormatDefines.h"
 #include "Common/OfficeFileFormats.h"
 #include "DesktopEditor/common/Directory.h"
 #include "DesktopEditor/common/File.h"
@@ -13,6 +15,7 @@
 #include "DesktopEditor/doctrenderer/embed/GraphicsEmbed.h"
 #include "DesktopEditor/graphics/pro/Fonts.h"
 #include "DesktopEditor/graphics/pro/Image.h"
+#include "PdfFile/PdfFile.h"
 
 #include <algorithm>
 #include <chrono>
@@ -469,12 +472,67 @@ namespace eo
 		auto format = formats.find(key);
 		if (!m_private->builder || format == formats.end())
 			return -1;
+		if (key == L"pdf")
+			return ExportPdf(path, password);
 		int formatType = format->second;
-		if (key == L"pdf" && m_private->isPdfForm)
-			formatType = AVS_OFFICESTUDIO_FILE_DOCUMENT_OFORM_PDF;
 		m_private->Run(L"eoEngine.beforeSave();");
 		std::wstring params = password.empty() ? L"" : L"<m_sSavePassword>" + XmlEscape(password) + L"</m_sSavePassword>";
 		int error = m_private->builder->SaveFile(formatType, path.c_str(), params.empty() ? nullptr : params.c_str());
+		m_private->Run(std::wstring(L"eoEngine.afterSave(") + (error == 0 ? L"true" : L"false") + L");");
+		return error;
+	}
+
+	// PDFs of documents, spreadsheets and presentations, as x2t writes them: sdkjs draws the pages
+	// into drawing commands (eoEngine.pdfCommands), core's PDF writer turns them into the file. Not
+	// through x2t: its renderer reads DoctRenderer.config from the program's directory, which on
+	// Android is the system's (so it runs without sdkjs and fails). A PDF form carries the
+	// document (docx) to edit it again, as x2t's doct_bin2pdfoform.
+	int Document::ExportPdf(const std::wstring& path, const std::wstring& password)
+	{
+		Timer timer;
+		m_private->Run(L"eoEngine.beforeSave();");
+		// Next to docbuilder's file (Editor.bin), whose pictures are in media/
+		std::wstring imagesDir = std::wstring_convert<std::codecvt_utf8<wchar_t>>().from_bytes(Execute(L"eoEngine.getImagesDirectory()"));
+		std::wstring fileDir = NSFile::GetDirectoryName(imagesDir);
+		std::wstring commandsPath = fileDir + L"/pdf.bin";
+		std::wstring metaPath = fileDir + L"/meta.docx";
+		int error = -1;
+		if (!m_private->isPdfForm || m_private->builder->SaveFile(AVS_OFFICESTUDIO_FILE_DOCUMENT_DOCX, metaPath.c_str()) == 0)
+		{
+			JSSmart<NSJSBase::CJSContext> context = NSJSBase::CJSContext::GetCurrent();
+			JSSmart<NSJSBase::CJSTryCatch> tryCatch = context->GetExceptions();
+			JSSmart<NSJSBase::CJSValue> result = context->runScript("eoEngine.pdfCommands()", tryCatch);
+			NSFile::CFileBinary file;
+			if (!tryCatch->Check() && result->isTypedArray() && file.CreateFileW(commandsPath))
+			{
+				JSSmart<NSJSBase::CJSTypedArray> array = result->toTypedArray();
+				NSJSBase::CJSDataBuffer commands = array->getData();
+				file.WriteFile(commands.Data, (DWORD)std::min<size_t>((size_t)array->getCount(), commands.Len));
+				file.CloseFile();
+				timer.Log("pdf: sdkjs' pages");
+
+				CPdfFile pdf(g_fonts);
+				pdf.CreatePdf();
+				pdf.SetTempDirectory(fileDir);
+				if (!password.empty())
+					pdf.SetPassword(password);
+				if (m_private->isPdfForm)
+				{
+					BYTE* meta = nullptr;
+					DWORD metaLength = 0;
+					if (NSFile::CFileBinary::ReadAllBytes(metaPath, &meta, metaLength))
+						pdf.AddMetaData(NSFile::CUtf8Converter::GetUnicodeFromCharPtr(g_format_oform_pdf_meta_tag, (LONG)strlen(g_format_oform_pdf_meta_tag)), meta, metaLength);
+					RELEASEARRAYOBJECTS(meta);
+				}
+				CConvertFromBinParams params;
+				params.m_sMediaDirectory = fileDir;
+				params.m_sThemesDirectory = g_runtimeDir + L"/sdkjs/slide/themes";
+				error = pdf.OnlineWordToPdfFromBinary(commandsPath, path, &params) == S_OK ? 0 : AVS_FILEUTILS_ERROR_CONVERT;
+				timer.Log("pdf: write");
+			}
+		}
+		NSFile::CFileBinary::Remove(commandsPath);
+		NSFile::CFileBinary::Remove(metaPath);
 		m_private->Run(std::wstring(L"eoEngine.afterSave(") + (error == 0 ? L"true" : L"false") + L");");
 		return error;
 	}

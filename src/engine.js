@@ -442,6 +442,19 @@ function chartCommands(engine, api, options) {
 // repaint: draws all pages again (others' locks and pictures); repaintOnMessages: also after
 // the server's messages (spreadsheets: others' changes and the answers to locks, after which
 // sdkjs carries out what waited for them)
+// The pages as drawing commands (sdkjs' asc_nativeGetPDF), which core writes into a PDF
+// (Document::ExportPdf); sdkjs gives their length through native.Save_End
+function pdfCommands(api) {
+	var native = window["native"], saveEnd = native["Save_End"], length = -1;
+	native["Save_End"] = function (type, size) { length = size; };
+	try {
+		var data = api["asc_nativeGetPDF"](null);
+	} finally {
+		native["Save_End"] = saveEnd;
+	}
+	return length >= 0 ? data.slice(0, length) : data;
+}
+
 // A font name as shown: theme fonts ("+mn-lt", "+mj-lt") by the theme's font
 function themeFontName(theme, name) {
 	var scheme = theme && theme.themeElements && theme.themeElements.fontScheme;
@@ -2021,6 +2034,12 @@ window["eoStartEngine"] = function () {
 	// Pictures and shapes
 
 	engine["getImagesDirectory"] = function () { return native["GetImagesPath"](); };
+	engine["pdfCommands"] = function () {
+		// All pages laid out
+		for (var i = 0; i < 10000 && isLayoutPending(); ++i)
+			runTimers(100);
+		return pdfCommands(api);
+	};
 
 	// Changes of pictures and shapes that don't change the layout (fill, outline, order) don't
 	// tell the drawing document which pages to repaint (the web editor repaints its canvas):
@@ -2981,6 +3000,7 @@ function spreadsheetEngine(window, api) {
 	});
 
 	engine["getImagesDirectory"] = function () { return native["GetImagesPath"](); };
+	engine["pdfCommands"] = function () { return pdfCommands(api); };
 
 	// ---------------------------------------------------------------------------------
 	// Cell formatting (the selection)
