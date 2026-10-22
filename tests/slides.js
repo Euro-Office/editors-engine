@@ -77,6 +77,10 @@ t.run("slide layouts, table styles and the background", function () {
 	eoEngine.insertTable(3, 2, styles[5].id);
 	var table = Asc.editor.WordControl.m_oLogicDocument.GetCurrentController().getSelectedArray()[0];
 	t.eq("a table of the style", table && table.graphicObject.TableStyle, styles[5].id);
+	t.ok("in the table", t.state()["structure"]["inTable"]);
+	eoEngine.tableAction("rowBelow");
+	t.eq("a row added", table.graphicObject.Content.length, 3);
+	eoEngine.undo();
 	eoEngine.undo();
 	eoEngine.setSlideBackground("FF0000");
 	t.eq("background", JSON.parse(eoEngine.getSlideBackground()), "FF0000");

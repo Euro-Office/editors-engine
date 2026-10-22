@@ -1607,7 +1607,8 @@ window["eoStartEngine"] = function () {
 			state["format"] = {};
 		}
 		try {
-			state["structure"] = isPresentation ? null : structureState();
+			// Presentations: only whether the cursor is in a table
+			state["structure"] = isPresentation ? { "inTable": !!selectedElement(Asc.c_oAscTypeSelectElement.Table) } : structureState();
 		} catch (e) {
 			state["structure"] = null;
 		}
