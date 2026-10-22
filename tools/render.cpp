@@ -238,6 +238,29 @@ int main(int argc, char* argv[])
 			{
 				if (line.empty())
 					continue;
+				// "!render <page> <png path>": draws the page (scale 1) into a PNG; the result is
+				// the number of pixels in the red of others' locks
+				if (line.rfind("!render ", 0) == 0)
+				{
+					std::istringstream command(line.substr(8));
+					int page = 0;
+					std::string path;
+					command >> page >> path;
+					eo::PageSize size = document.GetPageSize(page);
+					const int w = (int)(size.widthMm / 25.4 * 96 + 0.5);
+					const int h = (int)(size.heightMm / 25.4 * 96 + 0.5);
+					std::vector<unsigned char> pixels(4 * w * h);
+					document.RenderTile(page, w, h, 0, 0, w, h, pixels.data(), false);
+					SavePng(pixels, w, h, path);
+					size_t red = 0;
+					for (size_t i = 0; i < pixels.size(); i += 4)
+					{
+						if (pixels[i + 2] > 200 && pixels[i + 1] < 100 && pixels[i] < 100)
+							++red;
+					}
+					std::cout << "@@" << red << std::endl;
+					continue;
+				}
 				std::cout << "@@" << document.Execute(ToWide(line)) << std::endl;
 			}
 			document.Close();

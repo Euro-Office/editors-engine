@@ -174,6 +174,22 @@ export async function joinWithEngine({ config, documentPath, workDir, runEngine,
             await run(`eoEngine.insertImage(${q(name)}, 1, 1); ''`);
             return name;
         },
+        /** Draws a page into a PNG (path relative to the current directory); returns its pixels in the red of others' locks. */
+        async render(page, path) {
+            return Number(await run(`!render ${page} ${path}`));
+        },
+        /**
+         * The connection drops and doesn't come back, as when the app's socket gives up
+         * reconnecting: sdkjs reconnects first, then only lets the document be viewed.
+         */
+        async dropConnection() {
+            const dropped = new Promise((resolve) => socket.once("disconnect", resolve));
+            socket.io.engine.close();
+            await dropped;
+        },
+        async reconnectFailed() {
+            await run(`eoEngine.coReceive("reconnect_failed", "[]"); ''`);
+        },
         async leave() {
             clearInterval(timer);
             socket?.disconnect();
