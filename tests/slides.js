@@ -82,6 +82,17 @@ t.run("slide layouts, table styles and the background", function () {
 	t.eq("background", JSON.parse(eoEngine.getSlideBackground()), "FF0000");
 	eoEngine.undo();
 });
+t.run("designs", function () {
+	var designs = JSON.parse(eoEngine.previews("themes"));
+	t.ok("designs prepared", designs.length > 5);
+	t.eq("by their names", designs[4].name, "Green leaf");
+	var masters = Asc.editor.WordControl.m_oLogicDocument.slideMasters.length;
+	eoEngine.setTheme(4);
+	var presentation = Asc.editor.WordControl.m_oLogicDocument;
+	t.eq("the slides' design", presentation.Slides[0].Layout.Master.Theme.name, presentation.slideMasters[presentation.slideMasters.length - 1].Theme.name);
+	t.ok("a new master", presentation.slideMasters.length >= masters);
+	eoEngine.undo();
+});
 t.run("copies and pastes a text box", function () {
 	var presentation = Asc.editor.WordControl.m_oLogicDocument;
 	eoEngine.gotoSlide(0);

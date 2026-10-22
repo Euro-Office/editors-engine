@@ -233,6 +233,12 @@ int main(int argc, char* argv[])
 			return 2;
 		}
 		std::cout << "open + layout: " << MillisecondsSince(start) << " ms" << std::endl;
+		// Presentations: their designs, as the app prepares them before showing them
+		if (extension == "pptx")
+		{
+			start = std::chrono::steady_clock::now();
+			std::cout << "designs: " << document.PrepareThemes() << " in " << MillisecondsSince(start) << " ms" << std::endl;
+		}
 
 		if (const char* repl = getenv("EO_REPL"); repl && std::string(repl) == "1")
 		{

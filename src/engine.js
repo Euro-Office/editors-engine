@@ -2736,6 +2736,99 @@ window["eoStartEngine"] = function () {
 			};
 		});
 	};
+	// Designs (sdkjs' themes): the ones Document::PrepareThemes converted, themeN/theme.bin in
+	// sdkjs' slide/themes, by their files' names ("05_green leaf"). sdkjs' theme loader loads them
+	// over the web; here they are read from there.
+	var themes = [];
+	var THEME_NAMES = { "tort": "Turtle" };
+	engine["setThemes"] = function (files) {
+		var loader = api.ThemeLoader;
+		var directory = window["native"]["GetFontsDirectory"]() + "/../slide/themes/";
+		themes = files.map(function (file) {
+			var name = file.replace(/^\d+_/, "");
+			return THEME_NAMES[name] || name.charAt(0).toUpperCase() + name.slice(1);
+		});
+		loader.ThemesUrl = directory;
+		loader.Themes.EditorThemes = themes.map(function (name, i) { return { Name: name, Index: i }; });
+		loader.themes_info_editor = themes.map(function () { return null; });
+		loader.ThemesCached = [];
+		loader.LoadThemeJSAsync = function (src) {
+			this._callback_theme_load(window["native"]["GetFileBinary"](src));
+		};
+	};
+	// The design of all slides (index in previews("themes")), in one undo step
+	engine["setTheme"] = function (index) {
+		if (index < 0 || index >= themes.length)
+			return;
+		api.ChangeTheme(index, false);
+		// Its pictures are drawn from the designs' directory (Document's TileImage)
+		var info = api.ThemeLoader.themes_info_editor[index];
+		var images = info && info.ImageMap ? info.ImageMap : {};
+		Object.keys(images).forEach(function (key) {
+			if (!api.ImageLoader.map_image_index[images[key]])
+				preloadImage(api, images[key], 1, 1);
+		});
+		allPagesChanged();
+	};
+	// Pictures of the designs: their title slide's layout with its texts
+	previewKinds["themes"] = function () {
+		return themes.map(function (name, index) {
+			var master = themeMaster(index);
+			var layout = master && (master.sldLayoutLst[0] || null);
+			var width = logicDocument.GetWidthMM(), height = logicDocument.GetHeightMM();
+			return {
+				id: index, name: name, width: width, height: height,
+				draw: function (g) {
+					if (!layout)
+						return;
+					// At the presentation's size
+					g.transform(width / layout.Width, 0, 0, height / layout.Height, 0, 0);
+					layout.draw(g);
+				}
+			};
+		});
+	};
+	// A design's master, read from its file once (as sdkjs' theme loader reads it)
+	var themeMasters = [];
+	function themeMaster(index) {
+		if (themeMasters[index] !== undefined)
+			return themeMasters[index];
+		var loader = api.ThemeLoader;
+		var current = loader.CurrentLoadThemeIndex;
+		var master = null;
+		try {
+			var binary = loader.ThemesCached[index] = loader.ThemesCached[index] ||
+				window["native"]["GetFileBinary"](loader.ThemesUrl + "theme" + (index + 1) + "/theme.bin");
+			var reader = new AscCommon.BinaryPPTYLoader();
+			reader.Api = api;
+			reader.IsThemeLoader = true;
+			var presentation = {
+				setSldSz: function (size) { this.sldSz = size; },
+				GetWidthEMU: AscCommonSlide.CPresentation.prototype.GetWidthEMU,
+				GetHeightEMU: AscCommonSlide.CPresentation.prototype.GetHeightEMU,
+				GetWidthMM: AscCommonSlide.CPresentation.prototype.GetWidthMM,
+				GetHeightMM: AscCommonSlide.CPresentation.prototype.GetHeightMM,
+				slideMasters: [], DrawingDocument: api.WordControl.m_oDrawingDocument, CommentAuthors: {}
+			};
+			loader.CurrentLoadThemeIndex = index;
+			AscCommon.History.MinorChanges = true;
+			AscFormat.ExecuteNoHistory(function () { reader.Load(binary, presentation); }, this, []);
+			master = presentation.slideMasters[0] || null;
+			var images = loader.themes_info_editor[index] && loader.themes_info_editor[index].ImageMap || {};
+			Object.keys(images).forEach(function (key) {
+				if (!api.ImageLoader.map_image_index[images[key]])
+					preloadImage(api, images[key], 1, 1);
+			});
+		} catch (e) {
+			console.log("theme " + index + ": " + e);
+		} finally {
+			AscCommon.History.MinorChanges = false;
+			loader.CurrentLoadThemeIndex = current;
+		}
+		themeMasters[index] = master;
+		return master;
+	}
+
 	// The current slide's background: a color "RRGGBB"; getSlideBackground: its color, "" for
 	// none, null for other fills (pictures, gradients, from the layout)
 	engine["setSlideBackground"] = function (hex) {

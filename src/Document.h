@@ -65,6 +65,11 @@ namespace eo
 		                int x, int y, int width, int height,
 		                unsigned char* pixels, bool rgba);
 
+		// Presentations: sdkjs' designs (themes), converted once from their presentations in the
+		// runtime's sdkjs/slide/themes/src for the engine's previews("themes") and setTheme.
+		// Returns their count.
+		int PrepareThemes();
+
 	private:
 		int OpenPdf(const std::wstring& path, const std::wstring& tempDir, const std::wstring& password);
 		int SavePdf(const std::wstring& path);

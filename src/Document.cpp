@@ -143,6 +143,8 @@ namespace eo
 				SetFonts(g_fonts);
 				SetImageCache(imageCache);
 				SetRgba(rgba);
+				// The pictures of presentation designs ("themeN/media/...", see PrepareThemes)
+				SetThemesDirectory(g_runtimeDir + L"/sdkjs/slide/themes");
 			}
 
 			unsigned char* GetBits(int& width, int& height) override
@@ -261,6 +263,51 @@ namespace eo
 	}
 
 	// To an unencrypted file of the same format in tempDir (target)
+	int Document::PrepareThemes()
+	{
+		// The designs' presentations, in the order of their names ("01_blank.pptx", ...)
+		std::wstring dir = g_runtimeDir + L"/sdkjs/slide/themes";
+		std::vector<std::wstring> sources;
+		for (const std::wstring& file : NSDirectory::GetFiles(dir + L"/src"))
+		{
+			if (file.size() > 5 && file.compare(file.size() - 5, 5, L".pptx") == 0)
+				sources.push_back(file);
+		}
+		std::sort(sources.begin(), sources.end());
+
+		std::wstring names;
+		int count = 0;
+		for (const std::wstring& source : sources)
+		{
+			// As Document Server's allthemesgen: themeN/theme.bin and its pictures in themeN/media
+			std::wstring out = dir + L"/theme" + std::to_wstring(count + 1);
+			if (!NSFile::CFileBinary::Exists(out + L"/theme.bin"))
+			{
+				NSDirectory::CreateDirectory(out);
+				std::wstring task = L"<?xml version=\"1.0\" encoding=\"utf-8\"?><TaskQueueDataConvert><m_sFileFrom>" + XmlEscape(source) +
+					L"</m_sFileFrom><m_sFileTo>" + XmlEscape(out + L"/theme.bin") + L"</m_sFileTo><m_nFormatTo>" +
+					std::to_wstring(AVS_OFFICESTUDIO_FILE_CANVAS) + L"</m_nFormatTo><m_bDontSaveAdditional>true</m_bDontSaveAdditional>" +
+					L"<m_sFontDir>" + XmlEscape(g_runtimeDir + L"/fonts") + L"</m_sFontDir><m_sAllFontsPath>" +
+					XmlEscape(g_runtimeDir + L"/fonts/AllFonts.js") + L"</m_sAllFontsPath></TaskQueueDataConvert>";
+				std::wstring taskPath = out + L"/params.xml";
+				NSFile::CFileBinary::SaveToFile(taskPath, task, true);
+				int result = RunX2t(taskPath);
+				NSFile::CFileBinary::Remove(taskPath);
+				if (result != 0 || !NSFile::CFileBinary::Exists(out + L"/theme.bin"))
+				{
+					NSDirectory::DeleteDirectory(out);
+					continue;
+				}
+			}
+			std::wstring name = NSFile::GetFileName(source);
+			name = name.substr(0, name.size() - 5);
+			names += (count ? L"," : L"") + std::wstring(L"\"") + name + L"\"";
+			++count;
+		}
+		Execute(L"eoEngine.setThemes([" + names + L"])");
+		return count;
+	}
+
 	int Document::Decrypt(const std::wstring& path, const std::wstring& tempDir, const std::wstring& password, std::wstring& target)
 	{
 		std::wstring extension = path.substr(path.find_last_of(L'.') + 1);
