@@ -68,6 +68,8 @@ namespace eo
 	private:
 		int OpenPdf(const std::wstring& path, const std::wstring& tempDir, const std::wstring& password);
 		int SavePdf(const std::wstring& path);
+		void ReopenPdf();
+		bool ReplacePdfReader(const std::wstring& path);
 		int Decrypt(const std::wstring& path, const std::wstring& tempDir, const std::wstring& password, std::wstring& target);
 
 		struct Private;

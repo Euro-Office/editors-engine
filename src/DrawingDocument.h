@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+class IOfficeDrawingFile;
+
 namespace eo
 {
 	// The text of a page in reading order, with a box (left, top, right, bottom, in mm from
@@ -71,6 +73,8 @@ namespace eo
 		~DrawingDocument();
 
 		OpenResult Open(const std::wstring& path, const std::wstring& password, const std::wstring& tempDir);
+		// core's reader of the file (null when closed)
+		IOfficeDrawingFile* File();
 		void Close();
 
 		int GetPageCount();

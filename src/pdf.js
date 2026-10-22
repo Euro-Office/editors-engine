@@ -33,6 +33,10 @@ function readPageText() {
 	CFile.prototype._destroyTextInfo = function () {
 		window["g_native_drawing_file"]["DestroyTextInfo"]();
 	};
+	// The engine opens and closes the file (Document::OpenPdf, ReopenPdf)
+	CFile.prototype._closeFile = function () {
+		this.nativeFile = 0;
+	};
 }
 
 // ---------------------------------------------------------------------------------
@@ -258,9 +262,10 @@ function NativeCanvas(graphics, mmPerPixel) {
 
 window["eoOpenPdf"] = function () {
 	var file = window["eoPdfFile"];
+	// The engine's reader of the file (Document::OpenPdf)
 	var drawingFile = window["g_native_drawing_file"] = CreateEmbedObject("CDrawingFileEmbed");
-	if (!drawingFile["OpenFile"](file["path"], file["password"] || undefined) || drawingFile["GetErrorCode"]() !== 0) {
-		window["eoPdfError"] = drawingFile["GetErrorCode"]() || -1;
+	if (drawingFile["GetType"]() === -1) {
+		window["eoPdfError"] = -1;
 		return;
 	}
 	readPageText();
@@ -281,6 +286,7 @@ window["eoOpenPdf"] = function () {
 	// Where the open starts numbering: co-editing opens the server's file from here again
 	window["eoPdfIdStart"] = AscCommon.g_oIdCounter.m_nIdCounterLoad;
 	api["asc_nativeOpenFile"](undefined, undefined);
+	stopPainting(api.DocumentRenderer);
 	// The engine starts again on the server's file (co-editing, see engine.js' restartEngine)
 	window["eoStartEngine"] = function () { pdfEngine(api); };
 	pdfEngine(api);
@@ -304,17 +310,21 @@ function reopenPdf(api, path) {
 
 	api.DocumentRenderer.close();
 	api.DocumentRenderer = null;
-	var drawingFile = window["g_native_drawing_file"];
-	if (!drawingFile["OpenFile"](path, file["password"] || undefined))
-		return false;
-	// The pages are drawn from it too (Document::RenderTile)
 	file["path"] = path;
 	api["asc_nativeOpenFile"](undefined, undefined);
+	stopPainting(api.DocumentRenderer);
 	counter.Set_Load(false);
 	if (userId !== null)
 		counter.Set_UserId(userId);
 	api.User = user;
 	return true;
+}
+
+// The viewer paints its canvas on a timer of its own (every 40 ms): the engine draws tiles instead
+function stopPainting(viewer) {
+	viewer.timer = viewer.timerSync = viewer.timerAnimation = function () {};
+	viewer._paint = function () { return false; };
+	viewer.isRepaint = false;
 }
 
 function pdfEngine(api) {
@@ -357,6 +367,7 @@ function pdfEngine(api) {
 		state["layoutChanged"] = true;
 	}
 
+	stopPainting(viewer);
 	viewer.paint = function (onRepaint, onAfterPaint) {
 		if (onRepaint)
 			onRepaint();
@@ -977,8 +988,17 @@ function pdfEngine(api) {
 	var co = window["eoCoState"];
 	// Nothing is laid out here (engine.js' restart leaves the document editor's silent mode)
 	api.asc_SetSilentMode = function () {};
+	// The engine opens the server's file after this command (Document::ReopenPdf), then
+	// pdfReopened continues
 	api._onOpenCommand = function (url) {
 		var path = co.files[url];
+		if (!path) {
+			api.sendEvent("asc_onError", Asc.c_oAscError.ID.DownloadError, Asc.c_oAscError.Level.Critical);
+			return;
+		}
+		window["eoPdfReopen"] = path;
+	};
+	engine["pdfReopened"] = function (path) {
 		if (!path || !reopenPdf(api, path)) {
 			api.sendEvent("asc_onError", Asc.c_oAscError.ID.DownloadError, Asc.c_oAscError.Level.Critical);
 			return;

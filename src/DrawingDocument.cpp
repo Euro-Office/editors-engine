@@ -664,6 +664,11 @@ namespace eo
 		return Opened;
 	}
 
+	IOfficeDrawingFile* DrawingDocument::File()
+	{
+		return m_private->file.get();
+	}
+
 	void DrawingDocument::Close()
 	{
 		m_private->file.reset();

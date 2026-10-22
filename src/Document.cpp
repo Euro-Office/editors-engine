@@ -5,6 +5,7 @@
 #include "pdf_js.h"
 
 #include "Common/OfficeFileFormats.h"
+#include "DesktopEditor/common/Directory.h"
 #include "DesktopEditor/common/File.h"
 #include "DesktopEditor/doctrenderer/docbuilder.h"
 #include "DesktopEditor/doctrenderer/drawingfile.h"
@@ -95,11 +96,17 @@ namespace eo
 		}
 
 		// sdkjs' PDF editor reads PDFs through core's PDF reader (drawingfile_native.js), as in
-		// x2t; here pdf.js opens the file itself (CreateEmbedObject("CDrawingFileEmbed"))
+		// x2t: the engine's reader of the file (pdf.js' CreateEmbedObject("CDrawingFileEmbed")).
+		// core's readers share global settings that each one creates and deletes, so there is
+		// only one, the engine's, which sdkjs doesn't own.
+		IOfficeDrawingFile* g_pdfFile = nullptr;
+
 		NSJSBase::CJSEmbedObject* CreateDrawingFileEmbed()
 		{
 			CDrawingFileEmbed* embed = new CDrawingFileEmbed();
 			embed->m_pFile = new CDrawingFile(g_fonts);
+			if (g_pdfFile)
+				embed->m_pFile->SetInternalFile(g_pdfFile);
 			return embed;
 		}
 
@@ -169,8 +176,8 @@ namespace eo
 		bool isPdf = false;
 		std::wstring pdfCopy;
 		std::unique_ptr<DrawingDocument> pdfPages;
-		// The file the pages come from: sdkjs' (co-editing opens the server's)
-		std::wstring pdfPagesPath;
+		// Readers opened since (see ReplacePdfReader)
+		int pdfReaders = 0;
 
 		// Decoded images and metafiles, so tiles don't decode them again
 		NSImages::IImageFilesCache* imageCache = nullptr;
@@ -360,12 +367,12 @@ namespace eo
 		NSFile::CFileBinary::SetTempPath(tempDir);
 		m_private->pdfCopy = tempDir + L"/original.pdf";
 		m_private->pdfPages.reset(new DrawingDocument());
-		m_private->pdfPagesPath = m_private->pdfCopy;
-		if (!NSFile::CFileBinary::Copy(path, m_private->pdfCopy) ||
-		    m_private->pdfPages->Open(m_private->pdfCopy, password, tempDir) == DrawingDocument::Failed)
+		DrawingDocument::OpenResult opened = NSFile::CFileBinary::Copy(path, m_private->pdfCopy)
+			? m_private->pdfPages->Open(m_private->pdfCopy, password, tempDir) : DrawingDocument::Failed;
+		if (opened != DrawingDocument::Opened)
 		{
 			Close();
-			return -1;
+			return opened == DrawingDocument::NeedsPassword ? ERROR_PASSWORD : -1;
 		}
 		if (m_private->builder->OpenFile((g_runtimeDir + L"/empty/new.docx").c_str(), L"") != 0 ||
 		    !m_private->Run(L"void 'load sdkjs';"))
@@ -388,17 +395,13 @@ namespace eo
 		}
 		std::wstring engineJs = std::wstring_convert<std::codecvt_utf8<wchar_t>>().from_bytes(kEngineJs);
 		std::wstring pdfJs = std::wstring_convert<std::codecvt_utf8<wchar_t>>().from_bytes(kPdfJs);
-		if (!m_private->Run(engineJs) || !m_private->Run(pdfJs))
+		g_pdfFile = m_private->pdfPages->File();
+		bool started = m_private->Run(engineJs) && m_private->Run(pdfJs);
+		g_pdfFile = nullptr;
+		if (!started || m_private->RunNumber(L"window.eoPdfError || 0") != 0)
 		{
 			Close();
 			return -1;
-		}
-		// The reader's error: 4 for a password (none or a wrong one)
-		int error = (int)m_private->RunNumber(L"window.eoPdfError || 0");
-		if (error != 0)
-		{
-			Close();
-			return error == 4 ? ERROR_PASSWORD : -1;
 		}
 		m_private->password = password;
 		timer.Log("open the PDF (pdf.js)");
@@ -407,13 +410,14 @@ namespace eo
 
 	void Document::Close()
 	{
-		m_private->pdfPages.reset();
 		m_private->isPdf = false;
 		m_private->scope.reset();
 		m_private->context.reset();
 		if (m_private->builder)
 			m_private->builder->CloseFile();
 		m_private->builder.reset();
+		// After sdkjs, which reads it
+		m_private->pdfPages.reset();
 		RELEASEINTERFACE(m_private->imageCache);
 	}
 
@@ -494,15 +498,17 @@ namespace eo
 			size_t length = std::min<size_t>((size_t)array->getCount(), commands.Len);
 			timer.Log("save: sdkjs' changes");
 			// After the "%PDF" signature
-			if (length >= 4)
+			if (length >= 4 && m_private->pdfPages)
 			{
-				DrawingDocument writer;
 				// Pictures by their names in the images directory: core looks for them in
 				// <media dir>/media, the images directory being docbuilder's <file dir>/media
 				std::wstring imagesDir = std::wstring_convert<std::codecvt_utf8<wchar_t>>().from_bytes(Execute(L"eoEngine.getImagesDirectory()"));
 				std::wstring mediaDir = NSFile::GetDirectoryName(imagesDir);
-				error = writer.Open(m_private->pdfCopy, m_private->password, NSFile::GetDirectoryName(m_private->pdfCopy)) != DrawingDocument::Opened
-					? -1 : writer.SaveWithEditCommands(path, commands.Data + 4, (unsigned int)(length - 4), mediaDir);
+				// With the engine's reader (one at a time, see g_pdfFile), which is closed then:
+				// the file is opened again for sdkjs and the pages
+				error = m_private->pdfPages->SaveWithEditCommands(path, commands.Data + 4, (unsigned int)(length - 4), mediaDir);
+				if (!ReplacePdfReader(m_private->pdfCopy) && error == 0)
+					error = -1;
 				timer.Log("save: write the PDF");
 			}
 			if (commands.IsExternalize)
@@ -515,9 +521,47 @@ namespace eo
 	std::string Document::Execute(const std::wstring& script)
 	{
 		CDocBuilderValue result;
-		if (!m_private->Run(script, &result) || !result.IsString())
-			return std::string();
-		return std::wstring_convert<std::codecvt_utf8<wchar_t>>().to_bytes(result.ToString().c_str());
+		bool done = m_private->Run(script, &result);
+		std::string text = done && result.IsString()
+			? std::wstring_convert<std::codecvt_utf8<wchar_t>>().to_bytes(result.ToString().c_str()) : std::string();
+		if (m_private->isPdf)
+			ReopenPdf();
+		return text;
+	}
+
+	// Co-editing opens the server's file (pdf.js asks for it, eoPdfReopen): the engine's reader
+	// of the old one goes first (core's readers share global settings, which each one deletes),
+	// then sdkjs opens the new one (eoEngine.pdfReopened)
+	void Document::ReopenPdf()
+	{
+		CDocBuilderValue request;
+		if (!m_private->Run(L"window.eoPdfReopen || ''", &request) || !request.IsString())
+			return;
+		std::wstring path = request.ToString().c_str();
+		if (path.empty())
+			return;
+		m_private->Run(L"window.eoPdfReopen = null;");
+		bool opened = ReplacePdfReader(path);
+		m_private->Run(L"eoEngine.pdfReopened(" + (opened ? JsString(path) : std::wstring(L"null")) + L");");
+	}
+
+	// The engine's reader on path, also for sdkjs (CDrawingFileEmbed): the old one goes first
+	bool Document::ReplacePdfReader(const std::wstring& path)
+	{
+		m_private->pdfPages.reset();
+		// A temporary directory of its own: core keeps the fonts it extracted there by their
+		// paths, and the new reader would write other ones to the same paths
+		std::wstring tempDir = NSFile::GetDirectoryName(m_private->pdfCopy) + L"/reader" + std::to_wstring(++m_private->pdfReaders);
+		NSDirectory::CreateDirectory(tempDir);
+		std::unique_ptr<DrawingDocument> pages(new DrawingDocument());
+		if (pages->Open(path, m_private->password, tempDir) != DrawingDocument::Opened)
+			return false;
+		m_private->pdfPages = std::move(pages);
+		JSSmart<NSJSBase::CJSValue> embed = NSJSBase::CJSContext::GetCurrent()->GetGlobal()->get("g_native_drawing_file");
+		CDrawingFileEmbed* drawingFile = embed->isObject() ? dynamic_cast<CDrawingFileEmbed*>(embed->toObject()->getNative()) : nullptr;
+		if (drawingFile && drawingFile->m_pFile)
+			drawingFile->m_pFile->SetInternalFile(m_private->pdfPages->File());
+		return true;
 	}
 
 	int Document::GetPageCount()
@@ -544,16 +588,6 @@ namespace eo
 		unsigned char* target = pixels;
 		if (m_private->isPdf)
 		{
-			std::wstring file = std::wstring_convert<std::codecvt_utf8<wchar_t>>().from_bytes(Execute(L"window.eoPdfFile.path"));
-			if (!file.empty() && file != m_private->pdfPagesPath)
-			{
-				std::unique_ptr<DrawingDocument> pages(new DrawingDocument());
-				if (pages->Open(file, m_private->password, NSFile::GetDirectoryName(m_private->pdfCopy)) == DrawingDocument::Opened)
-				{
-					m_private->pdfPages = std::move(pages);
-					m_private->pdfPagesPath = file;
-				}
-			}
 			int origin = (int)m_private->RunNumber(L"eoEngine.pageOrigin(" + std::to_wstring(page) + L")");
 			if (origin < 0 || !m_private->pdfPages->RenderTile(origin, pageWidth, pageHeight, x, y, width, height, pixels, rgba, false))
 				memset(pixels, 0xFF, (size_t)width * height * 4);
