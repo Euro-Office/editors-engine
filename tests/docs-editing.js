@@ -37,5 +37,14 @@ t.run("adds a text box", function () {
 		return content && content.GetText().indexOf("A text box") >= 0;
 	}));
 });
+t.run("formats a selected chart's text", function () {
+	eoEngine.insertChart(0);
+	t.ok("the chart is selected", t.state().drawings.length > 0);
+	var bold = !!t.state().interface.Bold;
+	eoEngine.setBold(!bold);
+	t.eq("its bold is reported", !!t.state().interface.Bold, !bold);
+	eoEngine.setBold(bold);
+	t.eq("and back", !!t.state().interface.Bold, bold);
+});
 t.noError("editing");
 t.done();

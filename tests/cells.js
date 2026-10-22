@@ -20,5 +20,14 @@ t.run("cells", function () {
 	sheet = t.state()["sheet"];
 	t.eq("everything selected", [sheet["c2"], sheet["r2"]].join(), "16383,1048575");
 });
+t.run("formats a selected chart's text", function () {
+	eoEngine.insertChart(0);
+	t.ok("the chart is selected", t.state().drawings.length > 0);
+	var bold = !!t.state().interface.Bold;
+	eoEngine.setBold(!bold);
+	t.eq("its bold is reported", !!t.state().interface.Bold, !bold);
+	eoEngine.setBold(bold);
+	t.eq("and back", !!t.state().interface.Bold, bold);
+});
 t.noError("cells");
 t.done();

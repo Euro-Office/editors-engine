@@ -442,6 +442,12 @@ function chartCommands(engine, api, options) {
 // repaint: draws all pages again (others' locks and pictures); repaintOnMessages: also after
 // the server's messages (spreadsheets: others' changes and the answers to locks, after which
 // sdkjs carries out what waited for them)
+// A font name as shown: theme fonts ("+mn-lt", "+mj-lt") by the theme's font
+function themeFontName(theme, name) {
+	var scheme = theme && theme.themeElements && theme.themeElements.fontScheme;
+	return name && scheme && scheme.checkFont ? scheme.checkFont(name) : name || "";
+}
+
 function coEditingCommands(engine, api, repaint, repaintOnMessages) {
 	var co = window["eoCoState"] = window["eoCoState"] || {
 		outbox: [], socket: null, files: {}, loading: false,
@@ -1210,9 +1216,24 @@ window["eoStartEngine"] = function () {
 	logicDocument.Document_UpdateInterfaceState();
 	logicDocument.Document_UpdateSelectionState();
 
+	// Text formatting of the selected pictures, shapes and charts (not of text in them): bold, sizes
+	// and colors go to their text, but sdkjs reports it only for paragraphs (UpdateTextPr)
+	function drawingTextPr() {
+		if (editor.selectedDrawings().length === 0)
+			return null;
+		var controller = editor.drawingController();
+		return controller && controller.getParagraphTextPr ? controller.getParagraphTextPr() || null : null;
+	}
+
 	// State as JSON; pages to draw again and layout changes are reported once
 	engine["getState"] = function () {
 		updateSelection();
+		var textPr = drawingTextPr();
+		if (textPr) {
+			state["interface"]["Bold"] = !!textPr.Bold;
+			state["interface"]["Italic"] = !!textPr.Italic;
+			state["interface"]["Underline"] = !!textPr.Underline;
+		}
 		state["modified"] = api.isDocumentModified();
 		state["layoutPending"] = isLayoutPending();
 		state["currentPage"] = isPresentation ? logicDocument.CurPage : -1;
@@ -1445,11 +1466,12 @@ window["eoStartEngine"] = function () {
 
 	// Formatting at the cursor or of the selection, for the formatting panel
 	function formatState() {
-		var textPr = logicDocument.GetCalculatedTextPr ? logicDocument.GetCalculatedTextPr() : null;
+		var textPr = drawingTextPr() || (logicDocument.GetCalculatedTextPr ? logicDocument.GetCalculatedTextPr() : null);
 		var paraPr = logicDocument.GetCalculatedParaPr ? logicDocument.GetCalculatedParaPr() : null;
 		var result = {};
 		if (textPr) {
-			result["FontName"] = textPr.FontFamily ? textPr.FontFamily.Name : "";
+			var theme = isPresentation ? logicDocument.Get_Theme() : logicDocument.GetTheme();
+			result["FontName"] = themeFontName(theme, textPr.FontFamily ? textPr.FontFamily.Name : "");
 			result["FontSize"] = textPr.FontSize || 0;
 			result["Strikeout"] = !!textPr.Strikeout;
 			result["VertAlign"] = textPr.VertAlign || 0;
@@ -1469,7 +1491,7 @@ window["eoStartEngine"] = function () {
 			var bullet = paraPr && paraPr.Bullet;
 			result["List"] = bullet && bullet.getBulletType ? bullet.getBulletType() : -1;
 		} else {
-			result["List"] = api.asc_GetCurrentNumberingId && api.asc_GetCurrentNumberingId() !== null ? (paraPr.NumPr ? 1 : 0) : -1;
+			result["List"] = api.asc_GetCurrentNumberingId && api.asc_GetCurrentNumberingId() !== null ? (paraPr && paraPr.NumPr ? 1 : 0) : -1;
 			var styles = logicDocument.Get_Styles();
 			var styleId = paraPr && paraPr.PStyle ? paraPr.PStyle : styles.Get_Default_Paragraph();
 			var style = styleId && styles.Get(styleId);
@@ -2581,7 +2603,9 @@ function spreadsheetEngine(window, api) {
 		sheet["frozenRow"] = frozen ? frozen.getRow0() : 0;
 		sheet["warning"] = lastWarning;
 		lastWarning = null;
-		sheet["cellFormat"] = cellFormat();
+		// A chart, picture or shape is selected: formatting goes to its text, not to the cells
+		var textPr = view().isSelectOnShape ? drawingController().getParagraphTextPr() || null : null;
+		sheet["cellFormat"] = cellFormat(textPr);
 		var state = {
 			"cursor": null, "selection": [], "drawings": drawingStates(selectedDrawings(), drawingController()),
 			"dirtyPages": changed ? { "0": true } : {},
@@ -2591,9 +2615,9 @@ function spreadsheetEngine(window, api) {
 			"modified": api.asc_isDocumentModified(),
 			"error": lastError,
 			"interface": {
-				"Bold": !!font.getBold(),
-				"Italic": !!font.getItalic(),
-				"Underline": font.getUnderline() !== Asc.EUnderline.underlineNone,
+				"Bold": textPr ? !!textPr.Bold : !!font.getBold(),
+				"Italic": textPr ? !!textPr.Italic : !!font.getItalic(),
+				"Underline": textPr ? !!textPr.Underline : font.getUnderline() !== Asc.EUnderline.underlineNone,
 				"PrAlign": cell.getAlign().getAlignHorizontal(),
 				"CanUndo": api.asc_getCanUndo(),
 				"CanRedo": api.asc_getCanRedo()
@@ -2782,8 +2806,8 @@ function spreadsheetEngine(window, api) {
 		return [color.asc_getR(), color.asc_getG(), color.asc_getB()].map(function (v) { return ("0" + v.toString(16)).slice(-2); }).join("").toUpperCase();
 	}
 
-	// Format of the active cell, for the cell format panel
-	function cellFormat() {
+	// Format of the active cell, for the cell format panel; the font of a selected drawing's text (textPr)
+	function cellFormat(textPr) {
 		var info = api.asc_getCellInfo();
 		var xfs = info.asc_getXfs();
 		var border = xfs.getBorder ? xfs.getBorder() : null;
@@ -2791,16 +2815,24 @@ function spreadsheetEngine(window, api) {
 		return {
 			"numFormat": xfs.asc_getNumFormat() || "General",
 			"numFormatType": xfs.asc_getNumFormatInfo() ? xfs.asc_getNumFormatInfo().asc_getType() : 0,
-			"fontName": xfs.asc_getFontName() || "",
-			"fontSize": xfs.asc_getFontSize() || 0,
-			"strikeout": !!xfs.asc_getFontStrikeout(),
-			"color": colorHex(xfs.asc_getFontColor()),
 			"fill": colorHex(xfs.asc_getFillColor()),
 			"wrap": !!xfs.asc_getWrapText(),
 			"merged": info.asc_getMerge() === Asc.c_oAscMergeOptions.Merge || info.asc_getMerge() === Asc.c_oAscMergeOptions.MergeCenter,
 			"verticalAlign": xfs.asc_getVertAlign(),
-			"border": hasBorder
+			"border": hasBorder,
+			"fontName": textPr ? themeFontName(api.wbModel.theme, textPr.FontFamily ? textPr.FontFamily.Name : "") : xfs.asc_getFontName() || "",
+			"fontSize": textPr ? textPr.FontSize || 0 : xfs.asc_getFontSize() || 0,
+			"strikeout": textPr ? !!textPr.Strikeout : !!xfs.asc_getFontStrikeout(),
+			"color": textPr ? textPrColor(textPr) : colorHex(xfs.asc_getFontColor())
 		};
+	}
+
+	function textPrColor(textPr) {
+		var fill = textPr.Unifill && textPr.Unifill.fill;
+		var rgba = fill && fill.color && fill.color.RGBA;
+		if (!rgba)
+			return "";
+		return [rgba.R, rgba.G, rgba.B].map(function (v) { return ("0" + v.toString(16)).slice(-2); }).join("").toUpperCase();
 	}
 
 	// Commands that change cells redraw the sheet
