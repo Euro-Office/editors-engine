@@ -331,6 +331,11 @@ function pdfEngine(api) {
 	var viewer = api.DocumentRenderer;
 	var doc = api.getPDFDoc();
 	var drawingDocument = api.WordControl.m_oDrawingDocument;
+	// Previews of fills in the web editor's panels
+	["DrawImageTextureFillShape", "DrawImageTextureFillTextArt"].forEach(function (name) {
+		if (!drawingDocument[name])
+			drawingDocument[name] = function () {};
+	});
 	var native = window["native"];
 	var engine = window["eoEngine"] = {};
 	// What the app opened: sdkjs' PDF editor (EditorDocument.isPdf)
@@ -856,12 +861,51 @@ function pdfEngine(api) {
 	};
 
 	engine["selectAll"] = function () { api.asc_EditSelectAll(); };
+	// Clipboard: as in the other editors, the selection as plain text and in sdkjs' internal
+	// format, which keeps text boxes, shapes and pictures (and the text's formatting)
+	var clipboardFormat = AscCommon.c_oAscClipboardDataFormat;
+	AscCommon.g_specialPasteHelper.Init(api);
+	// As the web editor sets it once it opened the file (_openDocumentEndCallback)
+	AscCommon.PasteElementsId.g_bIsDocumentCopyPaste = false;
+	AscCommon.PasteElementsId.g_bIsPDFCopyPaste = true;
 	engine["copy"] = function () {
-		var text = api.asc_GetSelectedText ? api.asc_GetSelectedText(true) : "";
-		return JSON.stringify({ "text": text || "", "internal": "" });
+		var data = {};
+		api.asc_CheckCopy({
+			"pushData": function (format, value) {
+				data[format] = value;
+			}
+		}, clipboardFormat.Text | clipboardFormat.Internal);
+		var internal = data[clipboardFormat.Internal];
+		return JSON.stringify({
+			"text": data[clipboardFormat.Text] || "",
+			"internal": (internal && internal.sBase64) || (typeof internal === "string" ? internal : "")
+		});
 	};
-	engine["cut"] = engine["copy"];
-	engine["paste"] = function (text) { if (text) engine["enterText"](text); };
+	engine["cut"] = function () { api.asc_SelectionCut(); };
+	// Pastes the internal format if given, plain text otherwise
+	engine["paste"] = function (text, internal) {
+		// sdkjs pastes objects in the middle of the part of the page shown (getViewingRect),
+		// here where the page was last touched, not so near its edges that they cut it off
+		var page = lastPoint.page, size = pageSize(page);
+		var point = {
+			x: Math.min(0.75, Math.max(0.25, lastPoint.x / size[0])),
+			y: Math.min(0.9, Math.max(0.1, lastPoint.y / size[1]))
+		};
+		point.r = point.x;
+		point.b = point.y;
+		viewer.currentPage = page;
+		var getViewingRect = viewer.getViewingRect;
+		viewer.getViewingRect = function () { return point; };
+		try {
+			if (internal)
+				api.asc_PasteData(clipboardFormat.Internal, internal);
+			else if (text)
+				api.asc_PasteData(clipboardFormat.Text, text);
+		} finally {
+			viewer.getViewingRect = getViewingRect;
+			state["dirtyPages"][page] = true;
+		}
+	};
 
 	engine["undo"] = function () { api.Undo(); allPagesChanged(); };
 	engine["redo"] = function () { api.Redo(); allPagesChanged(); };

@@ -1413,11 +1413,11 @@ window["eoStartEngine"] = function () {
 				data[format] = value;
 			}
 		}, clipboardFormat.Text | clipboardFormat.Internal);
-		// The native engine copies the internal format as {sBase64, text, drawingUrls}
+		// Documents copy the internal format as {sBase64, text, drawingUrls}, presentations as a string
 		var internal = data[clipboardFormat.Internal];
 		return JSON.stringify({
 			"text": data[clipboardFormat.Text] || "",
-			"internal": (internal && internal.sBase64) || ""
+			"internal": (internal && internal.sBase64) || (typeof internal === "string" ? internal : "")
 		});
 	};
 
