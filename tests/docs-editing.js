@@ -12,6 +12,18 @@ t.run("typing", function () {
 	eoEngine.keyDown(89, false, true); // Ctrl+Y
 	t.ok("redone", documentText().indexOf("Engine test ") === 0);
 });
+t.run("Enter while a word is composed", function () {
+	// Keyboards may send Enter before they commit the word
+	eoEngine.keyDown(36, false, true);
+	eoEngine.setComposingText("one");
+	eoEngine.keyDown(13, false, false);
+	eoEngine.setComposingText("two");
+	eoEngine.finishComposingText();
+	t.eq("each word on its line", documentText().indexOf("one\ntwo"), 0);
+	eoEngine.undo();
+	eoEngine.undo();
+	eoEngine.undo();
+});
 t.run("shortcuts", function () {
 	eoEngine.keyDown(36, false, true);
 	eoEngine.keyDown(39, true, true); // Ctrl+Shift+Right: a word

@@ -1475,6 +1475,9 @@ window["eoStartEngine"] = function () {
 	}
 
 	engine["keyDown"] = function (keyCode, shift, ctrl) {
+		// Keyboards may send keys (Enter) while composing a word: the word stays where it is,
+		// later words are composed where the cursor is then
+		engine["finishComposingText"]();
 		if (keyCode === 8 || keyCode === 46)
 			selectWholeChart();
 		var e = new AscCommon.CKeyboardEvent();
