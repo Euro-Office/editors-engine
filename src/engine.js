@@ -3038,9 +3038,22 @@ function spreadsheetEngine(window, api) {
 			changed = true;
 	};
 
+	// At the active cell, at most 12 cm wide or high. Its size is given: sdkjs would read it from
+	// the picture loaded in a browser, and fits it into the cells shown, which here are none
 	engine["insertImage"] = edit(function (name, width, height) {
 		preloadImage(api, name, width, height);
-		view().objectRender.addImageDrawingObject([name], null);
+		var scale = Math.min(1, 120 / AscCommon.g_dKoef_pix_to_mm / Math.max(width, height));
+		var sheet = view(), lastCol = sheet.getLastVisibleCol, lastRow = sheet.getLastVisibleRow;
+		sheet.getLastVisibleCol = function () { return sheet.getFirstVisibleCol(true) + 100; };
+		sheet.getLastVisibleRow = function () { return sheet.getFirstVisibleRow(true) + 300; };
+		try {
+			sheet.objectRender.addImageDrawingObject([name], {
+				cell: sheet.model.selectionRange.activeCell, width: width * scale, height: height * scale
+			});
+		} finally {
+			sheet.getLastVisibleCol = lastCol;
+			sheet.getLastVisibleRow = lastRow;
+		}
 		runTimers(200);
 		view().setSelectionShape(drawingController().getSelectedArray().length > 0);
 	});
