@@ -31,6 +31,29 @@ t.run("adds a text box", function () {
 	eoEngine.mouse(2, 0, 150, 250, 1, false, false);
 	t.eq("its text", box.GetContents(), "A text box");
 });
+t.run("copies, pastes and deletes a text box", function () {
+	var count = annotations();
+	click(0, 60, 80);
+	var copied = JSON.parse(eoEngine.copy());
+	t.ok("copied in sdkjs' format", copied.internal.length > 0);
+	// Pasted where the page was last touched
+	click(0, 120, 150);
+	eoEngine.paste(copied.text, copied.internal);
+	t.eq("pasted", annotations(), count + 1);
+	var pasted = Asc.editor.getPDFDoc().annots[annotations() - 1];
+	var rect = pasted.GetRect();
+	t.ok("where the page was touched", Math.abs((rect[1] + rect[3]) / 2 * 25.4 / 72 - 150) < 5);
+	t.ok("selected", t.state().drawings.length > 0);
+	eoEngine.keyDown(46, false, false);
+	t.eq("deleted with the Delete key", annotations(), count);
+});
+t.run("places a signature in one undo step", function () {
+	var drawings = Asc.editor.getPDFDoc().drawings.length;
+	eoEngine.placeImage("signature.png", 200, 100, 0, 30, 30, 40, 20);
+	t.eq("a picture", Asc.editor.getPDFDoc().drawings.length, drawings + 1);
+	eoEngine.undo();
+	t.eq("undone", Asc.editor.getPDFDoc().drawings.length, drawings);
+});
 t.run("draws with the pen", function () {
 	var count = annotations();
 	eoEngine.startInk("E53935", 0.7);

@@ -29,5 +29,24 @@ t.run("formats a selected chart's text", function () {
 	eoEngine.setBold(bold);
 	t.eq("and back", !!t.state().interface.Bold, bold);
 });
+t.run("titles a chart and gives it cells", function () {
+	eoEngine.setChartTitles("Answers", "", "");
+	t.eq("title", eoEngine.chartState().titleText, "Answers");
+	eoEngine.startChartRange();
+	eoEngine.selectCells(0, 0, 0, 2);
+	t.eq("the selected cells", eoEngine.endChartRange(true), 0);
+	var chart = eoEngine.chartState();
+	t.ok("selected again", chart !== null);
+	t.eq("its range", chart && chart.range.replace(/^=/, ""), "'Engine test'!$A$1:$A$3");
+	t.ok("an invalid range refused", eoEngine.setChartRange("nothing!!") !== 0);
+	t.eq("the chart deleted", (eoEngine.clearCells(), t.state().drawings.length), 0);
+});
+t.run("inserts a picture at its size", function () {
+	eoEngine.selectCells(3, 3, 3, 3);
+	eoEngine.insertImage("picture.png", 400, 200);
+	var drawings = Asc.editor.wb.getWorksheet().model.Drawings;
+	var picture = drawings[drawings.length - 1].graphicObject;
+	t.ok("its size", Math.abs(picture.extX - 400 * 25.4 / 96) < 1 && Math.abs(picture.extY - 200 * 25.4 / 96) < 1);
+});
 t.noError("cells");
 t.done();
