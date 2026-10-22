@@ -272,6 +272,30 @@ function newCommentData(Type, user, text) {
 	return data;
 }
 
+// The fill or outline color (sdkjs' CUniFill) as "RRGGBB": "" for none, null for other fills
+// (pictures, gradients, patterns)
+function uniFillHex(fill) {
+	if (!fill || !fill.fill || fill.isNoFill())
+		return "";
+	if (fill.fill.type !== Asc.c_oAscFill.FILL_TYPE_SOLID)
+		return null;
+	var color = fill.getRGBAColor();
+	return ((1 << 24) + (color.R << 16) + (color.G << 8) + color.B).toString(16).slice(1).toUpperCase();
+}
+
+// The fill and outline of the first of the selected drawings ([{drawing}]), as JSON
+// {fill, outline} (see uniFillHex), "null" without one
+function drawingColorsJson(selected) {
+	var drawing = selected.length ? selected[0].drawing : null;
+	if (!drawing)
+		return "null";
+	var line = drawing.pen || (drawing.spPr && drawing.spPr.ln);
+	return JSON.stringify({
+		"fill": uniFillHex(drawing.brush || (drawing.spPr && drawing.spPr.Fill)),
+		"outline": line ? uniFillHex(line.Fill) : ""
+	});
+}
+
 // Charts, the same in all editors. options: selectedDrawings() as in the editors, insert(type),
 // action(name, change) for one undo step that redraws, sheet: data comes from cells
 function chartCommands(engine, api, options) {
@@ -303,15 +327,34 @@ function chartCommands(engine, api, options) {
 		api.asc_createSmartArt(type);
 	};
 
-	// The selected chart: {type, title, legend (Asc.c_oAscChartLegendShowSettings), labels, gridlines}, or null
+	// The text of a chart's title or an axis' title (CTitle), "" without
+	function titleText(title) {
+		var content = title && title.getDocContent && title.getDocContent();
+		return content ? content.GetText({ ParaSeparator: " " }).trim() : "";
+	}
+	function axes(chart) {
+		var plotArea = chart.chart.plotArea;
+		return { horizontal: plotArea.getHorizontalAxis(), vertical: plotArea.getVerticalAxis() };
+	}
+
+	// The selected chart: {type, title, titleText, legend (Asc.c_oAscChartLegendShowSettings),
+	// labels, gridlines, axes (whether it has a horizontal and vertical axis), horizontalTitle,
+	// verticalTitle (their titles' texts), dataInCells}, or null
 	engine["chartState"] = function () {
 		var chart = selectedChart();
 		if (!chart)
 			return null;
 		var current = chart.getAscSettings();
+		var axis = axes(chart);
 		return {
 			"type": current.getType(),
 			"title": current.getTitle() !== Asc.c_oAscChartTitleShowSettings.none,
+			"titleText": titleText(chart.chart.title),
+			"axes": !!(axis.horizontal && axis.vertical),
+			"horizontalTitle": titleText(axis.horizontal && axis.horizontal.title),
+			"verticalTitle": titleText(axis.vertical && axis.vertical.title),
+			// Spreadsheets: the cells of its data, as "Sheet1!$A$1:$C$5"
+			"range": options.sheet ? current.getRange() || "" : "",
 			"legend": current.getLegendPos(),
 			"labels": !!current.getShowVal(),
 			"gridlines": current.getVertGridLines() !== Asc.c_oAscGridLinesSettings.none || current.getHorGridLines() !== Asc.c_oAscGridLinesSettings.none,
@@ -329,6 +372,37 @@ function chartCommands(engine, api, options) {
 			changed.endEdit();
 	};
 
+	// The texts of the chart's title and its axes' titles; "" removes one. The title keeps the
+	// size and weight of its text
+	engine["setChartTitles"] = function (title, horizontal, vertical) {
+		var chart = selectedChart();
+		if (!chart)
+			return;
+		options.action(function () {
+			function textPr(old) {
+				var content = old && old.getDocContent && old.getDocContent();
+				if (!content)
+					return {};
+				content.SetApplyToAll(true);
+				var pr = content.GetCalculatedTextPr();
+				content.SetApplyToAll(false);
+				return pr || {};
+			}
+			var pr = textPr(chart.chart.title);
+			if (titleText(chart.chart.title) !== title)
+				AscFormat.builder_SetChartTitle(chart, title, pr.FontSize, pr.Bold);
+			var axis = axes(chart);
+			if (axis.horizontal && titleText(axis.horizontal.title) !== horizontal) {
+				pr = textPr(axis.horizontal.title);
+				AscFormat.builder_SetChartHorAxisTitle(chart, horizontal, pr.FontSize, pr.Bold);
+			}
+			if (axis.vertical && titleText(axis.vertical.title) !== vertical) {
+				pr = textPr(axis.vertical.title);
+				AscFormat.builder_SetChartVertAxisTitle(chart, vertical, pr.FontSize, pr.Bold);
+			}
+		});
+	};
+
 	engine["setChartElements"] = function (title, legend, labels, gridlines) {
 		var changed = settings();
 		changed.putTitle(title ? Asc.c_oAscChartTitleShowSettings.noOverlay : Asc.c_oAscChartTitleShowSettings.none);
@@ -343,6 +417,54 @@ function chartCommands(engine, api, options) {
 		else
 			changed.putHorGridLines(lines);
 		api.asc_applyChartSettings(changed);
+	};
+
+	// Spreadsheets: the cells the chart shows ("Sheet1!$A$1:$C$5"), as web-apps' "Select data".
+	// Returns 0 or the error (Asc.c_oAscError.ID: an invalid range, too much data)
+	engine["setChartRange"] = function (range) {
+		if (!options.sheet || !selectedChart())
+			return 0;
+		var changed = settings();
+		var error = changed.isValidRange(range);
+		if (error !== Asc.c_oAscError.ID.No)
+			return error;
+		error = new AscFormat.CChartDataRefs(null).checkDataRange(range, changed.getInRows(), changed.getType());
+		if (error !== Asc.c_oAscError.ID.No)
+			return error;
+		changed.startEdit();
+		changed.setRange(range);
+		changed.endEdit();
+		return 0;
+	};
+	// Spreadsheets: series from rows instead of columns, or the other way round
+	engine["switchChartRowCol"] = function () {
+		if (!options.sheet || !selectedChart())
+			return 0;
+		var changed = settings();
+		changed.startEdit();
+		var error = changed.switchRowCol();
+		if (error !== Asc.c_oAscError.ID.No) {
+			changed.cancelEdit();
+			return error;
+		}
+		changed.endEdit();
+		return 0;
+	};
+	// Spreadsheets: choosing the chart's cells on the sheet. startChartRange remembers the
+	// selected chart while cells are selected; endChartRange selects it again and, with apply,
+	// gives it the selected cells (setChartRange's result)
+	var rangeChart = null;
+	engine["startChartRange"] = function () {
+		rangeChart = options.sheet ? selectedChart() : null;
+	};
+	engine["endChartRange"] = function (apply) {
+		var chart = rangeChart;
+		rangeChart = null;
+		if (!chart || chart.bDeleted)
+			return 0;
+		var range = options.sheet.selectedRange();
+		options.sheet.select(chart);
+		return apply ? engine["setChartRange"](range) : 0;
 	};
 
 	// Documents and presentations: the data in the chart, as a table {series: [names],
@@ -2216,9 +2338,10 @@ window["eoStartEngine"] = function () {
 			logicDocument.FinalizeAction();
 		}
 	});
-	["setChartType", "setChartElements", "setChartData"].forEach(function (name) {
+	["setChartType", "setChartElements", "setChartData", "setChartTitles"].forEach(function (name) {
 		engine[name] = drawingCommand(engine[name]);
 	});
+	engine["drawingColors"] = function () { return drawingColorsJson(editor.selectedDrawings()); };
 
 	// Presentations: a slide after the current one, with the layout of the current one
 	engine["addSlide"] = function () { api.AddSlide(); };
@@ -2725,7 +2848,19 @@ function spreadsheetEngine(window, api) {
 
 	chartCommands(engine, api, {
 		selectedDrawings: selectedDrawings,
-		sheet: true,
+		sheet: {
+			// The selected cells, as a chart's range
+			selectedRange: function () {
+				var sheet = view().model;
+				return AscCommon.parserHelp.get3DRef(sheet.getName(), sheet.selectionRange.getLast().getAbsName());
+			},
+			select: function (drawing) {
+				var controller = drawingController();
+				controller.resetSelection();
+				controller.selectObject(drawing, 0);
+				view().setSelectionShape(true);
+			}
+		},
 		insert: function (type) {
 			// From the selected cells; for one cell, the table of filled cells around it, as in Excel
 			var selected = view().model.selectionRange.getLast();
@@ -2738,11 +2873,15 @@ function spreadsheetEngine(window, api) {
 			settings.putType(type);
 			api.asc_addChartDrawingObject(settings);
 		},
-		action: function (change) { change(); }
+		// One undo step, once the chart is locked
+		action: function (change) {
+			drawingController().checkSelectedObjectsAndCallback(change, [], false, AscDFH.historydescription_Spreadsheet_EditChart);
+		}
 	});
-	["insertChart", "setChartType", "setChartElements"].forEach(function (name) {
+	["insertChart", "setChartType", "setChartElements", "setChartTitles", "setChartRange", "switchChartRowCol", "endChartRange"].forEach(function (name) {
 		engine[name] = edit(engine[name]);
 	});
+	engine["drawingColors"] = function () { return drawingColorsJson(selectedDrawings()); };
 
 	// Comments on cells: [{id, text, user, time, quote, solved, replies, sheet, col, row}]. While
 	// co-editing they are locked on the server first (sdkjs changes them when it answers, and the
@@ -2925,8 +3064,9 @@ function spreadsheetEngine(window, api) {
 	// Commands that change cells redraw the sheet
 	function edit(action) {
 		return function () {
-			action.apply(null, arguments);
+			var result = action.apply(null, arguments);
 			changed = true;
+			return result;
 		};
 	}
 
