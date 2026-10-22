@@ -148,6 +148,10 @@ async function check(source, path) {
 
         // Typing in the engine reaches the web editor, and the other way round
         await engine.type(engineText + " ");
+        // The engine's view shows its own edit (pages to draw again)
+        if (Object.keys(JSON.parse(await engine.run("eoEngine.getState()")).dirtyPages).length === 0) {
+            throw new Error("the engine's edit doesn't change its pages");
+        }
         debug("engine typed:", (await engine.text()).slice(0, 80));
         await until("the web editor gets the engine's text", async () => (await web.text()).includes(engineText));
         await web.type(webText + " ");

@@ -643,9 +643,9 @@ function coEditingCommands(engine, api, repaint, repaintOnMessages) {
 		counter.Clear();
 		counter.m_nIdCounterLoad = co.idStart;
 		counter.Set_Load(true);
-		// The web editor's page (presentations: panes, scroll bars) was set up with the first
+		// Presentations: the web editor's page (panes, scroll bars) was set up with the first
 		// document; again it fails without a page
-		var initPage = api.WordControl && api.WordControl.Init;
+		var initPage = api.editorId === AscCommon.c_oEditorId.Presentation && api.WordControl.Init;
 		if (initPage)
 			api.WordControl.Init = function () {};
 		// Spreadsheets: the load starts co-editing, which runs already
@@ -673,7 +673,7 @@ function coEditingCommands(engine, api, repaint, repaintOnMessages) {
 			api._applyPreOpenLocks();
 			// Opened: sdkjs doesn't save while it opens
 			api.advancedOptionsAction = AscCommon.c_oAscAdvancedOptionsAction.None;
-			restartEngine();
+			window.setTimeout(restartEngine, 0);
 			return;
 		}
 		// A document opened from data, as the web editors' open sets it (not a new one)
@@ -689,7 +689,7 @@ function coEditingCommands(engine, api, repaint, repaintOnMessages) {
 			// Handlers of the web editor's page (presentations: thumbnails) fail without one
 			console.log("co-editing: opening: " + e);
 		}
-		restartEngine();
+		window.setTimeout(restartEngine, 0);
 	};
 
 	// The server's document is ready (now or after the session's changes): the engine starts
@@ -698,6 +698,8 @@ function coEditingCommands(engine, api, repaint, repaintOnMessages) {
 		if (!co.loading || !api.isDocumentLoadComplete)
 			return;
 		co.loading = false;
+		// The engine starts by leaving the silent mode docbuilder's load leaves documents in
+		api.asc_SetSilentMode(true);
 		window["eoStartEngine"]();
 		co.reloaded = true;
 	}
@@ -738,7 +740,11 @@ function coEditingCommands(engine, api, repaint, repaintOnMessages) {
 			if (!loading)
 				api.asc_LoadDocument();
 		});
-		api.asc_registerCallback("asc_onDocumentContentReady", restartEngine);
+		// After sdkjs finished: it leaves its silent mode after this event, which the engine's
+		// start leaves too (layout would stay off)
+		api.asc_registerCallback("asc_onDocumentContentReady", function () {
+			window.setTimeout(restartEngine, 0);
+		});
 		// Who else is in the session
 		function participants(users) {
 			var me = api.CoAuthoringApi.getUserConnectionId();
@@ -2489,7 +2495,8 @@ function spreadsheetEngine(window, api) {
 	// ---------------------------------------------------------------------------------
 	// State and commands
 
-	var changed = false;
+	// The sheet is drawn again (also when co-editing starts the engine again)
+	var changed = true;
 	var lastError = null;
 
 	function sheetState() {
