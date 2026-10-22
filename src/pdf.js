@@ -1033,7 +1033,10 @@ function pdfEngine(api) {
 		doc.private_computeDrawingAddingPos = function () { return { x: x, y: y }; };
 		api.ImageLoader.map_image_index[name].Image = { "width": width / pixelsToMm, "height": height / pixelsToMm };
 		try {
-			api.AddImageUrlAction(name);
+			// In one action, as the web editor adds pictures: a change the others get, and an undo step
+			doc.DoAction(function () {
+				api.AddImageUrlAction(name);
+			}, AscDFH.historydescription_Presentation_AddFlowImage);
 		} finally {
 			doc.private_computeDrawingAddingPos = computePosition;
 			api.ImageLoader.map_image_index[name].Image = { "width": widthPx, "height": heightPx };
