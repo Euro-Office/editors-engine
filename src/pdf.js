@@ -815,7 +815,15 @@ function pdfEngine(api) {
 		e.KeyCode = keyCode;
 		e.ShiftKey = shift;
 		e.CtrlKey = ctrl;
-		doc.OnKeyDown(e);
+		// The viewer handles the keys (deleting, moving the cursor); some it stops in the
+		// browser's event
+		var event = window.event;
+		window.event = { preventDefault: function () {}, stopPropagation: function () {} };
+		try {
+			viewer.OnKeyDown(e);
+		} finally {
+			window.event = event;
+		}
 	};
 
 	function codePoints(text) {
