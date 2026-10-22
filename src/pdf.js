@@ -798,10 +798,23 @@ function pdfEngine(api) {
 		return codes;
 	}
 	engine["enterText"] = function (text) { api.asc_enterText(codePoints(String(text))); };
-	engine["commitText"] = engine["enterText"];
-	// Typing goes in at once (fields and text boxes are short)
-	engine["setComposingText"] = function () {};
-	engine["finishComposingText"] = function () {};
+	// Keyboards compose words before committing them (Gboard): the composed text is shown in
+	// the text box or field as the web editor shows it (sdkjs' composite input)
+	engine["setComposingText"] = function (text) {
+		api.Begin_CompositeInput();
+		if (api.compositeInput)
+			api.Replace_CompositeText(codePoints(String(text)));
+	};
+	engine["finishComposingText"] = function () { api.End_CompositeInput(); };
+	// The keyboard's text, replacing the composed text if any
+	engine["commitText"] = function (text) {
+		if (api.compositeInput) {
+			engine["setComposingText"](text);
+			engine["finishComposingText"]();
+		} else {
+			engine["enterText"](text);
+		}
+	};
 
 	engine["selectAll"] = function () { api.asc_EditSelectAll(); };
 	engine["copy"] = function () {
