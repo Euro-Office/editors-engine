@@ -77,10 +77,11 @@ namespace eo
 		PageSize GetPageSize(int page);
 
 		// As Document::RenderTile: the area (x, y, width, height) of a page rendered at
-		// pageWidth x pageHeight pixels, into pixels (width * height * 4 bytes)
+		// pageWidth x pageHeight pixels, into pixels (width * height * 4 bytes); without
+		// annotations and form fields, the page alone (sdkjs' PDF editor draws them)
 		bool RenderTile(int page, int pageWidth, int pageHeight,
 		                int x, int y, int width, int height,
-		                unsigned char* pixels, bool rgba);
+		                unsigned char* pixels, bool rgba, bool annotations = true);
 
 		PageText GetPageText(int page);
 		std::vector<PageLink> GetLinks(int page);
@@ -90,6 +91,10 @@ namespace eo
 		// incremental update, to path. The document is closed then: open the saved file to go on.
 		// Returns 0 or an error (-1 not a PDF, -2 can't write).
 		int SaveWithChanges(const std::wstring& path, const std::vector<PdfMarkup>& markups, const std::vector<PdfImage>& images);
+		// PDF files: saves the file with the changes of sdkjs' PDF editor (its edit commands,
+		// as x2t applies them: CHtmlPage.Save's result without "%PDF") to path. Closes the
+		// document as SaveWithChanges does. Returns 0 or an error (-1 not a PDF, -2 can't write).
+		int SaveWithEditCommands(const std::wstring& path, unsigned char* commands, unsigned int size, const std::wstring& mediaDir);
 
 	private:
 		struct Private;

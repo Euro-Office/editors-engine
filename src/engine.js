@@ -613,6 +613,7 @@ function coEditingCommands(engine, api, repaint, repaintOnMessages) {
 		};
 	}
 	sendChangesToServer();
+	co.sendChangesToServer = sendChangesToServer;
 
 	// The document as the server converted it, from the file the app downloaded: loaded as
 	// docbuilder loads (the same ids as the web editors), then the session's changes are applied
@@ -772,7 +773,10 @@ function coEditingCommands(engine, api, repaint, repaintOnMessages) {
 		// Someone who may only view joins as a viewer, as in web-apps: sdkjs applies the others'
 		// changes as they come (live viewer) and edits nothing
 		co.viewing = editorConfig["mode"] === "view";
-		if (co.viewing)
+		// The PDF editor isn't in view mode for viewers (they fill forms in), as in web-apps
+		if (co.viewing && api.isPdfEditor && api.isPdfEditor())
+			api.asc_setPdfViewer(true);
+		else if (co.viewing)
 			api.asc_setViewMode(true);
 		// The real client (in docbuilder sdkjs would work offline)
 		api.CoAuthoringApi.set_url(null);
@@ -2406,7 +2410,9 @@ window["eoStartEngine"] = function () {
 		};
 	};
 };
-window["eoStartEngine"]();
+// PDFs start in pdf.js, which runs next (Document::OpenPdf)
+if (!window["eoPdfFile"])
+	window["eoStartEngine"]();
 
 // Spreadsheets. The active sheet is one page: its used cells and some empty ones around them.
 // Tiles are drawn by the print path (WorksheetView.drawForPrint) with a print page made of the

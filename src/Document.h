@@ -38,7 +38,8 @@ namespace eo
 		static const int ERROR_PASSWORD = 91;
 
 		// Converts the file to sdkjs' format in tempDir and lays it out. An encrypted file
-		// needs its password, and is saved with it again. Returns 0, the x2t error code
+		// needs its password, and is saved with it again. PDFs other than forms of the document
+		// editor open in sdkjs' PDF editor (pdf.js) and are saved as PDF only. Returns 0, the x2t error code
 		// (ERROR_PASSWORD for a missing or wrong password) or -1.
 		int Open(const std::wstring& path, const std::wstring& tempDir, const std::wstring& password = L"");
 		void Close();
@@ -65,6 +66,8 @@ namespace eo
 		                unsigned char* pixels, bool rgba);
 
 	private:
+		int OpenPdf(const std::wstring& path, const std::wstring& tempDir, const std::wstring& password);
+		int SavePdf(const std::wstring& path);
 		int Decrypt(const std::wstring& path, const std::wstring& tempDir, const std::wstring& password, std::wstring& target);
 
 		struct Private;

@@ -691,7 +691,7 @@ namespace eo
 
 	bool DrawingDocument::RenderTile(int page, int pageWidth, int pageHeight,
 	                                 int x, int y, int width, int height,
-	                                 unsigned char* pixels, bool rgba)
+	                                 unsigned char* pixels, bool rgba, bool annotations)
 	{
 		if (!m_private->file || page < 0 || page >= GetPageCount())
 			return false;
@@ -724,7 +724,9 @@ namespace eo
 		renderer->SetCoordTransformOffset(-x, -y);
 
 		bool stop = false;
-		m_private->file->DrawPageOnRenderer(renderer, page, &stop);
+		COfficeDrawingPageParams params;
+		params.SetDrawAnnotation(annotations);
+		m_private->file->DrawPageOnRenderer(renderer, page, &stop, &params);
 
 		RELEASEOBJECT(renderer);
 		// The pixels belong to the caller
@@ -1004,5 +1006,21 @@ namespace eo
 		pdf->Close();
 		Close();
 		return NSFile::CFileBinary::Exists(path) ? 0 : -2;
+	}
+
+	int DrawingDocument::SaveWithEditCommands(const std::wstring& path, unsigned char* commands, unsigned int size, const std::wstring& mediaDir)
+	{
+		if (m_private->format != Format::Pdf)
+			return -1;
+		CPdfFile* pdf = static_cast<CPdfFile*>(m_private->file.get());
+		if (!pdf->EditPdf(path))
+			return -2;
+		CConvertFromBinParams params;
+		params.m_sMediaDirectory = mediaDir;
+		params.m_sInternalMediaDirectory = mediaDir;
+		bool applied = size == 0 || pdf->AddToPdfFromBinary(commands, size, &params) == S_OK;
+		pdf->Close();
+		Close();
+		return applied && NSFile::CFileBinary::Exists(path) ? 0 : -2;
 	}
 }

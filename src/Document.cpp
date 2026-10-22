@@ -1,10 +1,14 @@
 #include "Document.h"
+#include "DrawingDocument.h"
 
 #include "engine_js.h"
+#include "pdf_js.h"
 
 #include "Common/OfficeFileFormats.h"
 #include "DesktopEditor/common/File.h"
 #include "DesktopEditor/doctrenderer/docbuilder.h"
+#include "DesktopEditor/doctrenderer/drawingfile.h"
+#include "DesktopEditor/doctrenderer/embed/DrawingFileEmbed.h"
 #include "DesktopEditor/doctrenderer/embed/GraphicsEmbed.h"
 #include "DesktopEditor/graphics/pro/Fonts.h"
 #include "DesktopEditor/graphics/pro/Image.h"
@@ -12,11 +16,14 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
 #include <codecvt>
+#include <cwchar>
 #include <cwctype>
 #include <locale>
 #include <map>
 #include <string>
+#include <vector>
 
 #ifdef __ANDROID__
 #include <android/log.h>
@@ -87,6 +94,35 @@ namespace eo
 #endif
 		}
 
+		// sdkjs' PDF editor reads PDFs through core's PDF reader (drawingfile_native.js), as in
+		// x2t; here pdf.js opens the file itself (CreateEmbedObject("CDrawingFileEmbed"))
+		NSJSBase::CJSEmbedObject* CreateDrawingFileEmbed()
+		{
+			CDrawingFileEmbed* embed = new CDrawingFileEmbed();
+			embed->m_pFile = new CDrawingFile(g_fonts);
+			return embed;
+		}
+
+		// A string as a JavaScript literal
+		std::wstring JsString(const std::wstring& text)
+		{
+			std::wstring result = L"\"";
+			for (wchar_t c : text)
+			{
+				if (c == L'\\' || c == L'"')
+					result += L'\\';
+				if (c < 0x20)
+				{
+					wchar_t escaped[8];
+					swprintf(escaped, 8, L"\\u%04x", (unsigned)c);
+					result += escaped;
+					continue;
+				}
+				result += c;
+			}
+			return result + L"\"";
+		}
+
 		// Lets doctrenderer draw straight into the engine's pixel buffer
 		class TileImage : public CGraphicsAppImage
 		{
@@ -128,6 +164,13 @@ namespace eo
 		std::wstring password;
 		// A PDF form (ONLYOFFICE's, opened in the document editor) is saved as one again
 		bool isPdfForm = false;
+		// Another PDF, in sdkjs' PDF editor (OpenPdf): sdkjs and the pages read a copy of the
+		// file (the app replaces the file when saving), whose pages are drawn by core's reader
+		bool isPdf = false;
+		std::wstring pdfCopy;
+		std::unique_ptr<DrawingDocument> pdfPages;
+		// The file the pages come from: sdkjs' (co-editing opens the server's)
+		std::wstring pdfPagesPath;
 
 		// Decoded images and metafiles, so tiles don't decode them again
 		NSImages::IImageFilesCache* imageCache = nullptr;
@@ -161,6 +204,7 @@ namespace eo
 			g_fonts->InitializeFromFolder(runtimeDir + L"/fonts");
 		}
 		timer.Log("load the font index");
+		NSJSBase::CJSContext::AddEmbedCreator("CDrawingFileEmbed", CreateDrawingFileEmbed, true);
 		return true;
 	}
 
@@ -266,17 +310,20 @@ namespace eo
 				return decrypted;
 			}
 		}
+		std::wstring extension = path.substr(path.find_last_of(L'.') + 1);
+		std::transform(extension.begin(), extension.end(), extension.begin(), ::towlower);
 		int converted = m_private->builder->OpenFile(openPath.c_str(), L"");
 		if (openPath != path)
 			NSFile::CFileBinary::Remove(openPath);
+		// Other PDFs than forms of the document editor: sdkjs' PDF editor
+		if (converted != 0 && extension == L"pdf")
+			return OpenPdf(path, tempDir, password);
 		if (converted != 0)
 		{
 			Close();
 			return converted;
 		}
 		m_private->password = password;
-		std::wstring extension = path.substr(path.find_last_of(L'.') + 1);
-		std::transform(extension.begin(), extension.end(), extension.begin(), ::towlower);
 		m_private->isPdfForm = extension == L"pdf";
 		timer.Log("convert (x2t)");
 
@@ -301,8 +348,67 @@ namespace eo
 		return 0;
 	}
 
+	// sdkjs' PDF editor (pdf.js) on core's PDF reader. Its scripts are part of the document
+	// editor's, so docbuilder opens a blank document for the context first.
+	int Document::OpenPdf(const std::wstring& path, const std::wstring& tempDir, const std::wstring& password)
+	{
+		Timer timer;
+		m_private->builder->CloseFile();
+		// sdkjs' reader gets no temporary directory and takes the process's (on Android none to
+		// write to); core's readers share where they put the file's embedded fonts, so the pages
+		// would lose them too
+		NSFile::CFileBinary::SetTempPath(tempDir);
+		m_private->pdfCopy = tempDir + L"/original.pdf";
+		m_private->pdfPages.reset(new DrawingDocument());
+		m_private->pdfPagesPath = m_private->pdfCopy;
+		if (!NSFile::CFileBinary::Copy(path, m_private->pdfCopy) ||
+		    m_private->pdfPages->Open(m_private->pdfCopy, password, tempDir) == DrawingDocument::Failed)
+		{
+			Close();
+			return -1;
+		}
+		if (m_private->builder->OpenFile((g_runtimeDir + L"/empty/new.docx").c_str(), L"") != 0 ||
+		    !m_private->Run(L"void 'load sdkjs';"))
+		{
+			Close();
+			return -1;
+		}
+		timer.Log("load sdkjs");
+		m_private->context.reset(new CDocBuilderContext(m_private->builder->GetContext()));
+		m_private->scope.reset(new CDocBuilderContextScope(m_private->context->CreateScope()));
+		m_private->isPdf = true;
+
+		std::string reader;
+		if (!NSFile::CFileBinary::ReadAllTextUtf8A(g_runtimeDir + L"/sdkjs/pdf/src/engine/drawingfile_native.js", reader) ||
+		    !m_private->Run(std::wstring_convert<std::codecvt_utf8<wchar_t>>().from_bytes(reader)) ||
+		    !m_private->Run(L"window.eoPdfFile = { path: " + JsString(m_private->pdfCopy) + L", password: " + JsString(password) + L" };"))
+		{
+			Close();
+			return -1;
+		}
+		std::wstring engineJs = std::wstring_convert<std::codecvt_utf8<wchar_t>>().from_bytes(kEngineJs);
+		std::wstring pdfJs = std::wstring_convert<std::codecvt_utf8<wchar_t>>().from_bytes(kPdfJs);
+		if (!m_private->Run(engineJs) || !m_private->Run(pdfJs))
+		{
+			Close();
+			return -1;
+		}
+		// The reader's error: 4 for a password (none or a wrong one)
+		int error = (int)m_private->RunNumber(L"window.eoPdfError || 0");
+		if (error != 0)
+		{
+			Close();
+			return error == 4 ? ERROR_PASSWORD : -1;
+		}
+		m_private->password = password;
+		timer.Log("open the PDF (pdf.js)");
+		return 0;
+	}
+
 	void Document::Close()
 	{
+		m_private->pdfPages.reset();
+		m_private->isPdf = false;
 		m_private->scope.reset();
 		m_private->context.reset();
 		if (m_private->builder)
@@ -313,6 +419,8 @@ namespace eo
 
 	int Document::Save(const std::wstring& path, const std::wstring& extension)
 	{
+		if (m_private->isPdf)
+			return extension == L"pdf" ? SavePdf(path) : -1;
 		// PDF and other exports aren't encrypted with the document's password
 		bool keepsPassword = extension != L"pdf" && extension != L"txt" && extension != L"csv" && extension != L"html";
 		return SaveWithPassword(path, extension, keepsPassword ? m_private->password : L"");
@@ -367,6 +475,43 @@ namespace eo
 		return error;
 	}
 
+	// sdkjs' changes (eoEngine.savePdf: CHtmlPage.Save's edit commands) applied to a copy of the
+	// file, as x2t applies them
+	int Document::SavePdf(const std::wstring& path)
+	{
+		Timer timer;
+		m_private->Run(L"eoEngine.beforeSave();");
+		JSSmart<NSJSBase::CJSContext> context = NSJSBase::CJSContext::GetCurrent();
+		JSSmart<NSJSBase::CJSTryCatch> tryCatch = context->GetExceptions();
+		JSSmart<NSJSBase::CJSValue> result = context->runScript("eoEngine.savePdf()", tryCatch);
+		int error = -1;
+		if (!tryCatch->Check() && result->isTypedArray())
+		{
+			JSSmart<NSJSBase::CJSTypedArray> array = result->toTypedArray();
+			NSJSBase::CJSDataBuffer commands = array->getData();
+			// The array's own length: its buffer may be larger, and zeros after the commands
+			// would make core read empty commands without end
+			size_t length = std::min<size_t>((size_t)array->getCount(), commands.Len);
+			timer.Log("save: sdkjs' changes");
+			// After the "%PDF" signature
+			if (length >= 4)
+			{
+				DrawingDocument writer;
+				// Pictures by their names in the images directory: core looks for them in
+				// <media dir>/media, the images directory being docbuilder's <file dir>/media
+				std::wstring imagesDir = std::wstring_convert<std::codecvt_utf8<wchar_t>>().from_bytes(Execute(L"eoEngine.getImagesDirectory()"));
+				std::wstring mediaDir = NSFile::GetDirectoryName(imagesDir);
+				error = writer.Open(m_private->pdfCopy, m_private->password, NSFile::GetDirectoryName(m_private->pdfCopy)) != DrawingDocument::Opened
+					? -1 : writer.SaveWithEditCommands(path, commands.Data + 4, (unsigned int)(length - 4), mediaDir);
+				timer.Log("save: write the PDF");
+			}
+			if (commands.IsExternalize)
+				commands.Free();
+		}
+		m_private->Run(std::wstring(L"eoEngine.afterSave(") + (error == 0 ? L"true" : L"false") + L");");
+		return error;
+	}
+
 	std::string Document::Execute(const std::wstring& script)
 	{
 		CDocBuilderValue result;
@@ -392,6 +537,29 @@ namespace eo
 	                          int x, int y, int width, int height,
 	                          unsigned char* pixels, bool rgba)
 	{
+		// PDFs: the page from the file (if it has one there); sdkjs draws its objects into a
+		// buffer of their own (doctrenderer's graphics clear the buffer to transparent white),
+		// which goes over the page
+		std::vector<unsigned char> objects;
+		unsigned char* target = pixels;
+		if (m_private->isPdf)
+		{
+			std::wstring file = std::wstring_convert<std::codecvt_utf8<wchar_t>>().from_bytes(Execute(L"window.eoPdfFile.path"));
+			if (!file.empty() && file != m_private->pdfPagesPath)
+			{
+				std::unique_ptr<DrawingDocument> pages(new DrawingDocument());
+				if (pages->Open(file, m_private->password, NSFile::GetDirectoryName(m_private->pdfCopy)) == DrawingDocument::Opened)
+				{
+					m_private->pdfPages = std::move(pages);
+					m_private->pdfPagesPath = file;
+				}
+			}
+			int origin = (int)m_private->RunNumber(L"eoEngine.pageOrigin(" + std::to_wstring(page) + L")");
+			if (origin < 0 || !m_private->pdfPages->RenderTile(origin, pageWidth, pageHeight, x, y, width, height, pixels, rgba, false))
+				memset(pixels, 0xFF, (size_t)width * height * 4);
+			objects.resize((size_t)width * height * 4);
+			target = objects.data();
+		}
 		if (!m_private->Run(L"eoEngine.beginTile();"))
 			return false;
 
@@ -405,10 +573,20 @@ namespace eo
 			: nullptr;
 		if (!graphics)
 			return false;
-		graphics->SetAppImage(new TileImage(pixels, width, height, rgba, m_private->imageCache));
+		graphics->SetAppImage(new TileImage(target, width, height, rgba, m_private->imageCache));
 
-		return m_private->Run(L"eoEngine.drawTile(" +
+		bool drawn = m_private->Run(L"eoEngine.drawTile(" +
 			std::to_wstring(page) + L", " + std::to_wstring(pageWidth) + L", " + std::to_wstring(pageHeight) + L", " +
 			std::to_wstring(x) + L", " + std::to_wstring(y) + L", " + std::to_wstring(width) + L", " + std::to_wstring(height) + L");");
+		// The objects over the page, by their opacity (the byte order is the same in both)
+		for (size_t i = 0; i < objects.size(); i += 4)
+		{
+			unsigned int alpha = objects[i + 3];
+			if (alpha == 0)
+				continue;
+			for (size_t c = 0; c < 3; ++c)
+				pixels[i + c] = (unsigned char)((objects[i + c] * alpha + pixels[i + c] * (255 - alpha) + 127) / 255);
+		}
+		return drawn;
 	}
 }

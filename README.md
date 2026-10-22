@@ -12,7 +12,8 @@ Kotlin UI (libg*) ── libeditors (EditorEngine, EditorDocument) ── JNI (s
 |---|---|
 | `src/Document.h/.cpp` | `eo::Document`: open a document (x2t converts it, sdkjs lays it out), page count and sizes, draw a tile into a pixel buffer, save |
 | `src/engine.js` | Runs in sdkjs after opening (embedded as `engine_js.h`): leaves docbuilder's builder mode, lays out the document, draws tiles |
-| `src/DrawingDocument.h/.cpp` | `eo::DrawingDocument`: PDF, XPS and DjVu through core's readers (PdfFile, XpsFile, DjVuFile), no sdkjs: pages, tiles, PDF passwords |
+| `src/pdf.js` | Runs after `engine.js` for PDFs (embedded as `pdf_js.h`): sdkjs' PDF editor in the engine, see [PDFs](#pdfs) |
+| `src/DrawingDocument.h/.cpp` | `eo::DrawingDocument`: PDF, XPS and DjVu through core's readers (PdfFile, XpsFile, DjVuFile), no sdkjs: pages, tiles, PDF passwords; the pages under sdkjs' PDF editor and saving its changes |
 | `src/jni/DocumentJni.cpp` | JNI for `lib.editors.base.engine.NativeEngine` (Android only); draws into `Bitmap`s |
 | `tools/render.cpp` | Desktop check: renders page 1 whole and from tiles, compares both and saves PNGs |
 
@@ -30,7 +31,8 @@ Kotlin UI (libg*) ── libeditors (EditorEngine, EditorDocument) ── JNI (s
 
 The runtime directory (`Document::Initialize`) contains:
 - `DoctRenderer.config`
-- `sdkjs/`: `word/sdk-all-min.js`, `word/sdk-all.js`, `common/Native/*.js`, `common/libfont/engine/fonts_native.js`, `vendor/xregexp-all-min.js`
+- `sdkjs/`: `word/sdk-all-min.js`, `word/sdk-all.js`, `common/Native/*.js`, `common/libfont/engine/fonts_native.js`, `pdf/src/engine/drawingfile_native.js`, `vendor/xregexp-all-min.js`
+- `empty/new.docx`: the blank document the PDF editor's context starts from (document-templates' `new/en-US/new.docx`)
 - `bundled-fonts/`: Liberation, Carlito, Caladea and Open Sans, the open fonts with the metrics of Arial, Times New Roman, Courier New, Calibri and Cambria
 - `fonts/`: the font index (`AllFonts.js`, `font_selection.bin`)
 
@@ -73,6 +75,17 @@ Opening, after the first start (which unpacks the runtime and indexes the fonts,
 - **Editing.** The web cell editor (`CellEditor`) and the events controller depend on the DOM, so cells are edited in a native field and committed with `WorksheetView._saveCellValueAfterEdit(range, [Fragment])`, the cell editor's own commit (formulas, recalculation and undo work). `selectCells(..., enterText)` enters and moves in one command, so the state reports both.
 - **Commands.** `selectCells`, `setCellText`, `clearCells`, `setActiveSheet`, the toolbar commands (`asc_setCellBold`, `asc_setCellAlign`, ... with the paragraph alignment values), undo/redo, copy/cut/paste and saving (xlsx, xlsm, xltx, xltm, ods, ots, csv). `getState` has the fields of the text editors' state plus `sheet`.
 - **Known:** wrapped text in a row with a fixed height runs into the next row (the print path doesn't clip it); a single page of a very large sheet (thousands of pixels each way) loses table styles, which tiles don't.
+
+## PDFs
+
+PDFs (other than ONLYOFFICE's forms, which docbuilder opens in the document editor) open in sdkjs' PDF editor (`PDFEditorApi`), as in the web editor: annotations (markups, ink, notes, text boxes, stamps), comments, pictures and shapes, form fields, search, and co-editing. docbuilder doesn't open PDFs, so `Document::OpenPdf` does it the way x2t saves PDFs on the server:
+
+- **Opening.** docbuilder opens a blank document, whose context has the PDF editor (it is part of the document editor's scripts). The engine loads `drawingfile_native.js` (the native counterpart of the web editor's WebAssembly reader) and registers core's reader for it (`CDrawingFileEmbed`, created with the engine's fonts); `pdf.js` opens a copy of the file with it, creates the `PDFEditorApi` and opens the document (`asc_nativeOpenFile`, as doctrenderer does for "pdf"). Objects are numbered from 0, as in the web editors, so co-editing works.
+- **The viewer.** sdkjs' viewer (`CHtmlPage`) is made for a browser page. `pdf.js` gives it a fixed layout (all pages "visible", zoom 4) and replaces its painting: the pages it would paint again come with the state (`dirtyPages`, from its pages' redraw flags). Touches are passed on as its mouse handlers pass them, at the viewer's pixels for the page millimeters. The text of pages, for selecting, marking up and searching, comes from core's reader (`drawingfile_native.js` leaves it out).
+- **Drawing.** `Document::RenderTile` draws the page from the file with core's reader without its annotations and form fields (`DrawingDocument::RenderTile`), then sdkjs' objects over it: added pictures, shapes and text boxes, annotations and fields, as `CHtmlPage.GetPrintPage` draws them. doctrenderer's graphics clear their buffer, so sdkjs draws into a buffer of its own, which goes over the page by its opacity. Annotations draw on a canvas (`CPDFGraphics`); a small canvas (`NativeCanvas` in `pdf.js`) takes their paths to the engine's graphics. They are drawn from their properties: in a browser, unchanged ones are pictures of their appearance streams, which the engine has no way to draw.
+- **Saving.** sdkjs' changes are edit commands (`CHtmlPage.Save`), which core applies to the original file (`CPdfFile::EditPdf`, `AddToPdfFromBinary`), as x2t does on the server: an incremental update. Added pictures go into the pages' content.
+- **Commands.** Those of the text editors where they apply (touches, keys, text, selection, copy, undo/redo, search, comments, outline), plus `markup(kind, color)`, `startInk(color, width)`/`stopInk()`, `addFreeText()`, `placeImage(...)` (a drawn signature), `deleteSelection()`, `setCurrentPage(page)` and `getFileOutline()`. The state has `pdf` (the pen, the selected annotation) and `navigate` (a place to show after a link or an entry of the contents).
+- **Co-editing.** As for documents: the server's file (`Editor.bin` or `origin.pdf`) is opened again from where the first open started numbering, then the session's changes are applied (`_openDocumentEndCallback`), and the engine starts again on it. Viewers are PDF viewers (`asc_setPdfViewer`), not in view mode: they fill in forms.
 
 ## Tests
 

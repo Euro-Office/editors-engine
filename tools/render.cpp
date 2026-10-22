@@ -4,8 +4,9 @@
 // Usage: eo-render <runtime dir> <document> <output dir> [scale] [script.js | save path ...]
 //
 // Scripts run in sdkjs after opening (e.g. editing commands from engine.js); their
-// results are printed. Other paths save the document there. PDF, XPS and DjVu files are
-// drawn by core's readers instead (password in EO_PASSWORD).
+// results are printed. Other paths save the document there. PDFs open in sdkjs' PDF editor
+// (pdf.js); XPS and DjVu files, and PDFs with EO_PDF_READER=1, are drawn by core's readers
+// instead (password in EO_PASSWORD).
 //
 // With EO_REPL=1, eo-render then reads JavaScript from stdin, one script per line, and prints
 // each result on a line starting with "@@" (for drivers such as the co-editing check).
@@ -138,10 +139,12 @@ int main(int argc, char* argv[])
 
 	eo::Document::Initialize(ToWide(argv[1]));
 
-	// PDF, XPS and DjVu: drawn by core's readers
+	// XPS and DjVu: drawn by core's readers; PDFs too with EO_PDF_READER=1 (otherwise, as in the
+	// app, in sdkjs' PDF editor)
 	const std::string path = argv[2];
 	const std::string extension = path.substr(path.find_last_of('.') + 1);
-	if (extension == "pdf" || extension == "xps" || extension == "djvu")
+	const bool pdfReader = getenv("EO_PDF_READER") && std::string(getenv("EO_PDF_READER")) == "1";
+	if ((extension == "pdf" && pdfReader) || extension == "xps" || extension == "djvu")
 	{
 		eo::DrawingDocument document;
 		auto start = std::chrono::steady_clock::now();
@@ -259,6 +262,14 @@ int main(int argc, char* argv[])
 							++red;
 					}
 					std::cout << "@@" << red << std::endl;
+					continue;
+				}
+				// "!save <path>": saves the document there (in the format of its extension); the
+				// result is Document::Save's
+				if (line.rfind("!save ", 0) == 0)
+				{
+					std::string target = line.substr(6);
+					std::cout << "@@" << document.Save(ToWide(target), ToWide(target.substr(target.find_last_of('.') + 1))) << std::endl;
 					continue;
 				}
 				std::cout << "@@" << document.Execute(ToWide(line)) << std::endl;

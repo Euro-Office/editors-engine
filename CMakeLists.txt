@@ -18,10 +18,12 @@ if(NOT EXISTS "${CORE_SOURCE_DIR}/DesktopEditor/doctrenderer/docbuilder.h")
     message(FATAL_ERROR "Set CORE_SOURCE_DIR to the core checkout")
 endif()
 
-# engine.js as a C++ string
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS src/engine.js)
+# engine.js and pdf.js as C++ strings
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS src/engine.js src/pdf.js)
 file(READ src/engine.js ENGINE_JS)
 configure_file(src/engine_js.h.in engine_js.h @ONLY)
+file(READ src/pdf.js PDF_JS)
+configure_file(src/pdf_js.h.in pdf_js.h @ONLY)
 
 # Prebuilt core libraries, linked by path. On Android they are packaged by
 # core's libx2t module, so they must not be CMake targets here as well.
