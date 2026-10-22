@@ -12,7 +12,7 @@ import { createHmac } from "node:crypto";
 import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, extname, join } from "node:path";
 
-const DOCUMENT_TYPES = { docx: "word", pptx: "slide", xlsx: "cell" };
+const DOCUMENT_TYPES = { docx: "word", pptx: "slide", xlsx: "cell", pdf: "pdf" };
 
 function base64url(value) {
     return Buffer.from(value).toString("base64").replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");

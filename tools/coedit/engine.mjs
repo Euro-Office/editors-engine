@@ -107,11 +107,13 @@ export async function joinWithEngine({ config, documentPath, workDir, runEngine,
             if (data.type !== "cursor") log("server:", data.type, JSON.stringify(data).slice(0, 200));
             // The converted document first, then the message that opens it
             const urls = data.type === "documentOpen" && data.data && data.data.data;
-            if (urls && typeof urls === "object" && urls["Editor.bin"]) {
+            // PDFs: the file itself
+            const url = urls && typeof urls === "object" && (urls["Editor.bin"] || urls["origin.pdf"]);
+            if (url) {
                 const file = join(workDir, `Editor-${++downloads}.bin`);
-                await download(urls["Editor.bin"], file);
+                await download(url, file);
                 // The engine's paths are relative to the current directory (in a container too)
-                await run(`eoEngine.coSetFile(${q(urls["Editor.bin"])}, ${q(relative(process.cwd(), file))})`);
+                await run(`eoEngine.coSetFile(${q(url)}, ${q(relative(process.cwd(), file))})`);
             }
             await receive("message", [data]);
         });
@@ -137,14 +139,19 @@ export async function joinWithEngine({ config, documentPath, workDir, runEngine,
             }
             throw new Error("the engine didn't join the session");
         },
-        /** The text of the document (presentations: the first slide's). */
+        /** The text of the document (presentations: the first slide's; PDFs: the notes'). */
         async text() {
+            if (type === "pdf") return run("Asc.editor.getPDFDoc().annots.map(function (annot) { return annot.GetContents() || ''; }).join(' / ')");
             if (type === "slide") return JSON.parse(await run("eoEngine.textBlocks(0)")).map((block) => block.text).join(" / ");
             if (type === "cell") return run("Asc.editor.wbModel.getWorksheet(0).getCell3(0, 0).getValue() + ' / ' + Asc.editor.wbModel.getWorksheet(0).getCell3(1, 0).getValue()");
             return JSON.parse(await run("JSON.stringify(Asc.editor.WordControl.m_oLogicDocument.GetText({ParaSeparator: ' / '}))"));
         },
-        /** Types at the start of the document (presentations: of the first text box on the first slide; spreadsheets: into A1). */
+        /** Types at the start of the document (presentations: of the first text box on the first slide; spreadsheets: into A1; PDFs: a note). */
         async type(text) {
+            if (type === "pdf") {
+                return run(`eoEngine.setCommentUser("engine", "Engine"); eoEngine.mouse(0, 0, 20, 20, 1, false, false); ` +
+                    `eoEngine.mouse(2, 0, 20, 20, 1, false, false); eoEngine.addComment(${q(text.trim())}); ''`);
+            }
             if (type === "slide") {
                 // The first text box that takes a cursor (others are on the slide's layout)
                 for (const block of JSON.parse(await run("eoEngine.textBlocks(0)"))) {
@@ -198,6 +205,15 @@ export async function joinWithEngine({ config, documentPath, workDir, runEngine,
         }
     };
     return participant;
+}
+
+/** Runs script in the engine on the document at documentPath (relative to the current directory) and returns its result. */
+export async function engineResult(runEngine, documentPath, script) {
+    const engine = startEngine(runEngine, documentPath, () => {});
+    await engine.started;
+    const result = await engine.run(script);
+    engine.stop();
+    return result;
 }
 
 /** The file of an integration, copied for the engine to start with. */

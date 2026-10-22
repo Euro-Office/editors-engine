@@ -12,7 +12,7 @@
 import { mkdirSync, readFileSync, copyFileSync, writeFileSync } from "node:fs";
 import { basename, join, relative, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
-import { joinWithEngine, wait } from "./engine.mjs";
+import { engineResult, joinWithEngine, wait } from "./engine.mjs";
 import { joinWithBrowser, PIXEL_PNG } from "./web.mjs";
 import { startStorage } from "./storage.mjs";
 
@@ -114,8 +114,13 @@ function storageSource() {
     };
 }
 
-// The text of a saved document: its XML without the markup (text is split into runs)
-function savedText(path) {
+// The text of a saved document: its XML without the markup (text is split into runs); PDFs: the
+// notes, read by the engine
+async function savedText(path) {
+    if (path.endsWith(".pdf")) {
+        return engineResult(runEngine, relative(process.cwd(), path),
+            "Asc.editor.getPDFDoc().annots.map(function (annot) { return annot.GetContents() || ''; }).join(' / ')");
+    }
     const parts = { docx: ["word/document.xml"], pptx: ["ppt/slides/slide1.xml"], xlsx: ["xl/sharedStrings.xml", "xl/worksheets/sheet1.xml"] };
     const kind = path.split(".").pop();
     return parts[kind].map((part) => {
@@ -148,7 +153,7 @@ async function check(source, path) {
         await engine.ready();
         debug("engine joined:", await engine.text());
         // The first page's red before others lock anything (it may have red of its own)
-        const red = kind !== "xlsx" ? await engine.render(0, renderPath) : 0;
+        const red = kind === "docx" || kind === "pptx" ? await engine.render(0, renderPath) : 0;
         if (traceScript) debug("trace:", await engine.run("JSON.stringify(window.traceLog || [])"));
         web = await joinWithBrowser({ url: webUrl, nextcloud: source.nextcloud ? nextcloud : null, log: debug });
         debug("web joined:", await web.text());
@@ -156,8 +161,11 @@ async function check(source, path) {
         await until("the engine sees the web editor", async () => (await engine.session()).participants.filter((p) => !p.me).length > 0);
         // Both numbered the document's objects alike (changes name objects by id)
         if (kind !== "xlsx") {
-            const lastId = kind === "pptx" ? "var tree = Asc.editor.WordControl.m_oLogicDocument.Slides[0].cSld.spTree; tree[tree.length - 1].Get_Id()"
-                : "var content = Asc.editor.WordControl.m_oLogicDocument.Content; content[content.length - 1].Get_Id()";
+            const lastId = {
+                pptx: "var tree = Asc.editor.WordControl.m_oLogicDocument.Slides[0].cSld.spTree; tree[tree.length - 1].Get_Id()",
+                docx: "var content = Asc.editor.WordControl.m_oLogicDocument.Content; content[content.length - 1].Get_Id()",
+                pdf: "var pages = Asc.editor.getDocumentRenderer().pagesInfo.pages; pages.map(function (page) { return page.GetId() }).join()"
+            }[kind];
             const ids = [await engine.run(lastId), await web.run(new Function(lastId.replace(/; ([^;]*)$/, "; return $1")))];
             if (ids[0] !== ids[1]) throw new Error(`the engine numbers objects differently from the web editor (${ids[0]}, web ${ids[1]})`);
         }
@@ -185,7 +193,7 @@ async function check(source, path) {
         }
 
         // Pictures: the web editor's are downloaded for the engine; the engine's are uploaded
-        if (kind !== "xlsx") {
+        if (kind === "docx" || kind === "pptx") {
             await web.insertPicture();
             await until("the engine downloads the web editor's picture", async () => engine.pictures.length > 0);
             const pictures = await web.pictures();
@@ -198,7 +206,7 @@ async function check(source, path) {
         if (viewerConfig) {
             viewer = await joinWithEngine({ config: viewerConfig, documentPath: relative(process.cwd(), local), workDir: join(workDir, "viewer"), runEngine, log: debug });
             await viewer.ready();
-            if ((await viewer.run("String(Asc.editor.isViewMode)")) !== "true") throw new Error("the viewer can edit");
+            if ((await viewer.run("String(Asc.editor.isViewMode || !!Asc.editor.isPdfViewer)")) !== "true") throw new Error("the viewer can edit");
             await until("the viewer has the edits so far", async () => (await viewer.text()).includes(webText));
             await until("the others see the viewer as one", async () => (await engine.session()).participants.some((p) => p.view));
             const liveText = `Live ${kind} ${Date.now() % 100000}`;
@@ -221,7 +229,7 @@ async function check(source, path) {
 
         // Others' locks are marked in red: the paragraph or text box the web editor edits in
         // strict co-editing (in fast co-editing, locks end with each second's changes)
-        if (kind !== "xlsx") {
+        if (kind === "docx" || kind === "pptx") {
             await web.typeStrict("Strict ");
             const locks = kind === "pptx" ? "Asc.editor.WordControl.m_oLogicDocument.Slides[0].cSld.spTree" : "Asc.editor.WordControl.m_oLogicDocument.Content";
             await until("the engine sees the web editor's lock", async () => (await engine.run(
@@ -249,7 +257,7 @@ async function check(source, path) {
 
     // The Document Server saves into the integration once everybody left
     const saved = await source.saved(path, before);
-    const text = savedText(saved);
+    const text = await savedText(saved);
     for (const part of expected) {
         if (!text.includes(part)) throw new Error(`the saved document doesn't have "${part}"`);
     }
