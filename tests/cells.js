@@ -33,6 +33,7 @@ t.run("titles a chart and gives it cells", function () {
 	eoEngine.setChartTitles("Answers", "", "");
 	t.eq("title", eoEngine.chartState().titleText, "Answers");
 	eoEngine.startChartRange();
+	t.eq("cells are selected meanwhile", t.state().drawings.length, 0);
 	eoEngine.selectCells(0, 0, 0, 2);
 	t.eq("the selected cells", eoEngine.endChartRange(true), 0);
 	var chart = eoEngine.chartState();

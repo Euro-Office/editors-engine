@@ -456,6 +456,9 @@ function chartCommands(engine, api, options) {
 	var rangeChart = null;
 	engine["startChartRange"] = function () {
 		rangeChart = options.sheet ? selectedChart() : null;
+		// Taps select cells, not the chart
+		if (rangeChart)
+			options.sheet.deselect();
 	};
 	engine["endChartRange"] = function (apply) {
 		var chart = rangeChart;
@@ -2854,6 +2857,10 @@ function spreadsheetEngine(window, api) {
 				var sheet = view().model;
 				return AscCommon.parserHelp.get3DRef(sheet.getName(), sheet.selectionRange.getLast().getAbsName());
 			},
+			deselect: function () {
+				drawingController().resetSelection();
+				view().setSelectionShape(false);
+			},
 			select: function (drawing) {
 				var controller = drawingController();
 				controller.resetSelection();
@@ -2878,7 +2885,7 @@ function spreadsheetEngine(window, api) {
 			drawingController().checkSelectedObjectsAndCallback(change, [], false, AscDFH.historydescription_Spreadsheet_EditChart);
 		}
 	});
-	["insertChart", "setChartType", "setChartElements", "setChartTitles", "setChartRange", "switchChartRowCol", "endChartRange"].forEach(function (name) {
+	["insertChart", "setChartType", "setChartElements", "setChartTitles", "setChartRange", "switchChartRowCol", "startChartRange", "endChartRange"].forEach(function (name) {
 		engine[name] = edit(engine[name]);
 	});
 	engine["drawingColors"] = function () { return drawingColorsJson(selectedDrawings()); };
