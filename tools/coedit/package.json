@@ -1,7 +1,7 @@
 {
-  "name": "eo-coedit-driver",
+  "name": "eo-coedit-check",
   "private": true,
-  "description": "Drives the engine (eo-render, EO_REPL=1) in a co-editing session of a Document Server through Nextcloud",
+  "description": "Co-editing check: the engine (eo-render, EO_REPL=1) and a web editor edit documents together through a Document Server",
   "type": "module",
   "dependencies": {
     "socket.io-client": "4.8.1"

@@ -9,10 +9,11 @@
 var timers = [];
 var nextTimerId = 1;
 
-window["setTimeout"] = function (callback) {
+window["setTimeout"] = function (callback, delay) {
 	if (typeof callback !== "function")
 		return 0;
-	var timer = { id: nextTimerId++, callback: callback, args: Array.prototype.slice.call(arguments, 2) };
+	// Delays count: sdkjs gives up on the server's answers after one (locks, saving)
+	var timer = { id: nextTimerId++, callback: callback, args: Array.prototype.slice.call(arguments, 2), due: Date.now() + (Number(delay) || 0) };
 	timers.push(timer);
 	return timer.id;
 };
@@ -39,11 +40,15 @@ window["clearTimeout"] = function (id) {
 	}
 };
 
-// Runs the timers queued so far (not those they queue) for up to budget milliseconds
+// Runs the timers queued so far that are due (not those they queue) for up to budget milliseconds
 function runTimers(budget) {
 	var end = Date.now() + budget;
 	for (var count = timers.length; count > 0 && timers.length > 0 && Date.now() < end; --count) {
 		var timer = timers.shift();
+		if (timer.due > Date.now()) {
+			timers.push(timer);
+			continue;
+		}
 		try {
 			timer.callback.apply(window, timer.args);
 		} catch (e) {
@@ -434,8 +439,22 @@ function chartCommands(engine, api, options) {
 // they change. docbuilder's load of a document gives the ids the web editors give, so the
 // server's version is loaded the same way, from the same id, and the engine starts again on it
 // (eoStartEngine). The session's state is kept across that (window.eoCoState).
-function coEditingCommands(engine, api) {
-	var co = window["eoCoState"] = window["eoCoState"] || { outbox: [], socket: null, files: {}, loading: false };
+// repaint: draws all pages again (others' locks and pictures); repaintOnMessages: also after
+// the server's messages (spreadsheets: others' changes and the answers to locks, after which
+// sdkjs carries out what waited for them)
+function coEditingCommands(engine, api, repaint, repaintOnMessages) {
+	var co = window["eoCoState"] = window["eoCoState"] || {
+		outbox: [], socket: null, files: {}, loading: false,
+		participants: [], cursors: {}, reconnecting: false, disconnected: false, sentAuth: null
+	};
+	co.repaint = repaint;
+	co.repaintOnMessages = !!repaintOnMessages;
+
+	// The socket's settings go to the app's socket.io client: reconnecting (sdkjs' settings from
+	// the server) and the tokens to authenticate with when it does
+	function reconnection(name) {
+		return function (value) { co.outbox.push({ "type": "reconnection", "name": name, "value": value }); };
+	}
 
 	function EngineSocket(options) {
 		var self = this;
@@ -445,13 +464,19 @@ function coEditingCommands(engine, api) {
 		this.io = {
 			opts: { transports: options["transports"] },
 			on: function (name, callback) { (self.managerEvents[name] = self.managerEvents[name] || []).push(callback); },
-			reconnectionAttempts: function () {},
-			reconnectionDelay: function () {},
-			reconnectionDelayMax: function () {},
+			reconnectionAttempts: reconnection("attempts"),
+			reconnectionDelay: reconnection("delay"),
+			reconnectionDelayMax: reconnection("delayMax"),
 			setOpenToken: function (token) { options["auth"]["token"] = token; },
 			setSessionToken: function (token) { options["auth"]["session"] = token; }
 		};
+		co.sentAuth = authTokens(options);
 		co.outbox.push({ "type": "connect", "options": options });
+	}
+
+	function authTokens(options) {
+		var auth = options["auth"] || {};
+		return JSON.stringify({ "token": auth["token"] || null, "session": auth["session"] || null });
 	}
 	EngineSocket.prototype.on = function (name, callback) {
 		(this.events[name] = this.events[name] || []).push(callback);
@@ -476,9 +501,94 @@ function coEditingCommands(engine, api) {
 		return co.socket;
 	};
 
-	// The id docbuilder's load started with: the document object is its first new object
-	if (co.idStart === undefined && api.WordControl && api.WordControl.m_oLogicDocument)
-		co.idStart = Number(api.WordControl.m_oLogicDocument.Get_Id()) - 1;
+	// Pictures: sdkjs learns their URLs on the server (the document's, then those of pictures
+	// others add); the engine draws them from its images directory, so the app downloads them
+	// there (coImageLoaded)
+	if (!co.urlsHooked) {
+		co.urlsHooked = true;
+		var documentUrls = AscCommon.g_oDocumentUrls;
+		var addUrls = documentUrls.addUrls;
+		documentUrls.addUrls = function (urls) {
+			addUrls.apply(this, arguments);
+			if (!co.socket)
+				return;
+			for (var name in urls) {
+				if (name.indexOf(documentUrls.mediaPrefix) === 0)
+					co.outbox.push({ "type": "fetch", "url": urls[name], "name": name.substring(documentUrls.mediaPrefix.length) });
+			}
+		};
+	}
+
+	// Others' cursors, which the web editor draws on its overlay (positions on the page, mm)
+	function foreignCursor(id, shortId, x, y, size, page, transform) {
+		function point(px, py) {
+			return transform ? [transform.TransformPointX(px, py), transform.TransformPointY(px, py)] : [px, py];
+		}
+		var top = point(x, y);
+		var bottom = point(x, y + size);
+		co.cursors[id] = { "user": id, "shortId": shortId, "page": page, "x1": top[0], "y1": top[1], "x2": bottom[0], "y2": bottom[1] };
+	}
+	var drawingDocument = api.WordControl && api.WordControl.m_oDrawingDocument;
+	if (drawingDocument) {
+		drawingDocument.Collaborative_UpdateTarget = foreignCursor;
+		drawingDocument.Collaborative_RemoveTarget = function (id) { delete co.cursors[id]; };
+		drawingDocument.Collaborative_TargetsUpdate = function () {};
+	}
+
+	// Parts others locked are framed in red, as in the web editor; core's graphics would frame
+	// all of them in green, own ones too
+	var graphics = AscCommon.CNativeGraphics.prototype;
+	function isOthersLock(type) {
+		return type !== AscCommon.c_oAscLockTypes.kLockTypeNone && !api.isViewMode &&
+			!(type === AscCommon.c_oAscLockTypes.kLockTypeMine && AscCommon.CollaborativeEditing.Is_Fast());
+	}
+	graphics.DrawLockParagraph = function (type, x, y1, y2) {
+		if (!isOthersLock(type))
+			return;
+		this.p_color(238, 53, 37, 255);
+		this.p_width(300);
+		this._s();
+		this._m(x + 1, y1);
+		this._l(x, y1);
+		this._l(x, y2);
+		this._l(x + 1, y2);
+		this.ds();
+	};
+	graphics.DrawLockObjectRect = function (type, x, y, w, h) {
+		if (!isOthersLock(type) || this.IsThumbnail)
+			return;
+		var margin = 1;
+		this.p_color(238, 53, 37, 255);
+		this.p_width(300);
+		this._s();
+		this._m(x - margin, y - margin);
+		this._l(x + w + margin, y - margin);
+		this._l(x + w + margin, y + h + margin);
+		this._l(x - margin, y + h + margin);
+		this._z();
+		this.ds();
+	};
+	// A lock changes: pages are drawn again (the web editor repaints its canvas)
+	if (!co.locksHooked) {
+		co.locksHooked = true;
+		var setType = AscCommon.CLock.prototype.Set_Type;
+		AscCommon.CLock.prototype.Set_Type = function () {
+			setType.apply(this, arguments);
+			co.locksChanged = true;
+		};
+	}
+
+	// The id docbuilder's load started with: the document object is its first new object.
+	// Presentations: the web editors' load gives the presentation one id less than
+	// docbuilder's (and so all objects after it)
+	var isSpreadsheet = api.editorId === AscCommon.c_oEditorId.Spreadsheet;
+	if (co.idStart === undefined && api.WordControl && api.WordControl.m_oLogicDocument) {
+		var isPresentation = api.editorId === AscCommon.c_oEditorId.Presentation;
+		co.idStart = Number(api.WordControl.m_oLogicDocument.Get_Id()) - (isPresentation ? 2 : 1);
+	}
+	// Spreadsheets: the web editors load them right after the table of objects (id 1)
+	if (co.idStart === undefined && isSpreadsheet)
+		co.idStart = 1;
 
 	// Loading a document sets up the web editor's text input element and touch scrolling; the
 	// app has its own
@@ -523,21 +633,74 @@ function coEditingCommands(engine, api) {
 		var counter = AscCommon.g_oIdCounter;
 		var userId = counter.m_sUserId;
 		var user = api.User;
-		AscCommon.g_oTableId.Clear();
+		// The table of objects keeps its id: changes that add objects are addressed to it
+		var table = AscCommon.g_oTableId;
+		var tableId = table.Id;
+		table.Clear();
+		delete table.m_aPairs[table.Id];
+		table.Id = tableId;
+		table.m_aPairs[tableId] = table;
 		counter.Clear();
 		counter.m_nIdCounterLoad = co.idStart;
-		api.asc_nativeOpenFile(data);
+		counter.Set_Load(true);
+		// The web editor's page (presentations: panes, scroll bars) was set up with the first
+		// document; again it fails without a page
+		var initPage = api.WordControl && api.WordControl.Init;
+		if (initPage)
+			api.WordControl.Init = function () {};
+		// Spreadsheets: the load starts co-editing, which runs already
+		var coAuthoringInit = api._coAuthoringInit;
+		api._coAuthoringInit = function () {};
+		try {
+			api.asc_nativeOpenFile(data, undefined, true);
+		} finally {
+			if (initPage)
+				api.WordControl.Init = initPage;
+			api._coAuthoringInit = coAuthoringInit;
+		}
 		counter.Set_Load(false);
 		if (userId !== null)
 			counter.Set_UserId(userId);
 		api.User = user;
+		if (isSpreadsheet) {
+			sendChangesToServer();
+			co.loading = true;
+			api.isDocumentLoadComplete = false;
+			// The end of the web editor's open, without its page: the session's changes and
+			// locks (onDocumentContentReady when the changes are applied)
+			api.asc_nativeCalculateFile();
+			api._applyFirstLoadChanges();
+			api._applyPreOpenLocks();
+			// Opened: sdkjs doesn't save while it opens
+			api.advancedOptionsAction = AscCommon.c_oAscAdvancedOptionsAction.None;
+			restartEngine();
+			return;
+		}
+		// A document opened from data, as the web editors' open sets it (not a new one)
+		api.DocumentType = 2;
 		sendChangesToServer();
 		co.loading = true;
 		api.isDocumentLoadComplete = false;
 		// The web editors wait for the document's images here; docbuilder's load has them
 		api.ServerImagesWaitComplete = true;
-		api._openDocumentEndCallback();
+		try {
+			api._openDocumentEndCallback();
+		} catch (e) {
+			// Handlers of the web editor's page (presentations: thumbnails) fail without one
+			console.log("co-editing: opening: " + e);
+		}
+		restartEngine();
 	};
+
+	// The server's document is ready (now or after the session's changes): the engine starts
+	// again on it
+	function restartEngine() {
+		if (!co.loading || !api.isDocumentLoadComplete)
+			return;
+		co.loading = false;
+		window["eoStartEngine"]();
+		co.reloaded = true;
+	}
 
 	// Joins the session of the editor configuration the integration made (JSON: document,
 	// editorConfig, token, ...)
@@ -564,20 +727,42 @@ function coEditingCommands(engine, api) {
 		api.asc_setDocInfo(info);
 		// After the server's license the document is opened, as web-apps does (once: the
 		// permissions may come again, and each load starts an action that blocks saving)
+		// (spreadsheets: sdkjs loads it itself, when connected)
 		var loading = false;
-		api.asc_registerCallback("asc_onGetEditorPermissions", function () {
-			if (loading)
-				return;
+		var loadDocument = api.asc_LoadDocument;
+		api.asc_LoadDocument = function () {
 			loading = true;
-			api.asc_LoadDocument();
+			return loadDocument.apply(this, arguments);
+		};
+		api.asc_registerCallback("asc_onGetEditorPermissions", function () {
+			if (!loading)
+				api.asc_LoadDocument();
 		});
-		// The server's document is ready: the engine starts again on it
-		api.asc_registerCallback("asc_onDocumentContentReady", function () {
-			if (!co.loading)
-				return;
-			co.loading = false;
-			window["eoStartEngine"]();
-			co.reloaded = true;
+		api.asc_registerCallback("asc_onDocumentContentReady", restartEngine);
+		// Who else is in the session
+		function participants(users) {
+			var me = api.CoAuthoringApi.getUserConnectionId();
+			co.participants = Object.keys(users || {}).map(function (id) {
+				var user = users[id];
+				return { "id": user.asc_getId(), "name": user.asc_getUserName(), "color": user.asc_getColor(),
+					"view": !!user.asc_getView(), "me": user.asc_getId() === me };
+			});
+		}
+		api.asc_registerCallback("asc_onAuthParticipantsChanged", participants);
+		api.asc_registerCallback("asc_onParticipantsChanged", participants);
+		// The connection: sdkjs blocks editing while it reconnects, and turns to viewing when it
+		// can't (asc_onCoAuthoringDisconnect)
+		api.asc_registerCallback("asc_onStartAction", function (type, id) {
+			if (id === Asc.c_oAscAsyncAction.Disconnect)
+				co.reconnecting = true;
+		});
+		api.asc_registerCallback("asc_onEndAction", function (type, id) {
+			if (id === Asc.c_oAscAsyncAction.Disconnect)
+				co.reconnecting = false;
+		});
+		api.asc_registerCallback("asc_onCoAuthoringDisconnect", function () {
+			co.disconnected = true;
+			co.reconnecting = false;
 		});
 		// Changes go to the others at once (fast co-editing), sent each second
 		api.asc_SetFastCollaborative(true);
@@ -594,8 +779,24 @@ function coEditingCommands(engine, api) {
 			api._autoSave();
 	};
 
-	// What sdkjs sends, as JSON: [{type: "connect", options} | {type: "emit", name, data} | {type: "disconnect"}]
+	// What sdkjs sends, as JSON: [{type: "connect", options} | {type: "emit", name, data} |
+	// {type: "disconnect"} | {type: "auth", auth: {token, session}} (new tokens for reconnecting) |
+	// {type: "reconnection", name: "attempts" | "delay" | "delayMax", value} |
+	// {type: "fetch", url, name} (a picture to download into the images directory)]
 	engine["coTakeOutbox"] = function () {
+		// sdkjs changes the tokens in the socket's options
+		if (co.socket) {
+			var tokens = authTokens(co.socket.options);
+			if (tokens !== co.sentAuth) {
+				co.sentAuth = tokens;
+				co.outbox.push({ "type": "auth", "auth": JSON.parse(tokens) });
+			}
+		}
+		if (co.locksChanged) {
+			co.locksChanged = false;
+			if (co.repaint)
+				co.repaint();
+		}
 		var messages = co.outbox;
 		co.outbox = [];
 		return JSON.stringify(messages);
@@ -612,6 +813,8 @@ function coEditingCommands(engine, api) {
 			socket.fire(socket.managerEvents, name, args);
 		else
 			socket.fire(socket.events, name, args);
+		if (name === "message" && co.repaintOnMessages && co.repaint && args[0] && args[0]["type"] !== "cursor")
+			co.repaint();
 	};
 
 	// A file the app downloaded for a URL of the server
@@ -627,9 +830,56 @@ function coEditingCommands(engine, api) {
 		return reloaded;
 	};
 
+	// A picture the app downloaded (a fetch of coTakeOutbox) is in the images directory
+	engine["coImageLoaded"] = function (name) {
+		if (co.repaint)
+			co.repaint();
+	};
+
+	// Where the app uploads a picture to insert (JSON: {url, token}): the server answers with
+	// its name in the document and URL ({"media/name.png": url}), for coAddUrls; then the
+	// picture is inserted by that name (insertImage)
+	engine["coUploadInfo"] = function () {
+		return JSON.stringify({ "documentId": api.documentId, "token": api.CoAuthoringApi.get_jwt() });
+	};
+
+	engine["coAddUrls"] = function (json) {
+		AscCommon.g_oDocumentUrls.addUrls(JSON.parse(json));
+	};
+
 	engine["coState"] = function () {
+		return JSON.stringify(engine["coEditingState"]());
+	};
+
+	// The session for the app's view: state (sdkjs' ConnectionState), whether it reconnects or
+	// has ended (disconnected: sdkjs turned to viewing), the participants ({id, name, color,
+	// view, me}) and others' cursors ({user, name, color, page, x1, y1, x2, y2}); null without one
+	engine["coEditingState"] = function () {
 		var coApi = api.CoAuthoringApi && api.CoAuthoringApi._CoAuthoringApi;
-		return JSON.stringify({ "state": coApi ? coApi.get_state() : -1 });
+		if (!co.socket)
+			return null;
+		// sdkjs moves others' cursors after changes when it draws a page
+		var collaborative = AscCommon.CollaborativeEditing;
+		if (Object.keys(co.cursors).length && collaborative && collaborative.Update_ForeignCursorsPositions)
+			collaborative.Update_ForeignCursorsPositions();
+		var colors = {};
+		co.participants.forEach(function (user) { colors[user.id] = user; });
+		var cursors = Object.keys(co.cursors).map(function (id) {
+			var cursor = co.cursors[id];
+			var user = colors[id];
+			return {
+				"user": id, "name": user ? user.name : "", "page": cursor.page,
+				"color": user ? user.color : "#" + ("000000" + AscCommon.getUserColorById(cursor.shortId, null, true, true).toString(16)).substr(-6),
+				"x1": cursor.x1, "y1": cursor.y1, "x2": cursor.x2, "y2": cursor.y2
+			};
+		});
+		return {
+			"state": coApi ? coApi.get_state() : -1,
+			"reconnecting": co.reconnecting,
+			"disconnected": co.disconnected,
+			"participants": co.participants,
+			"cursors": cursors
+		};
 	};
 }
 
@@ -720,6 +970,12 @@ window["eoStartEngine"] = function () {
 	// sdkjs switches slides (after adding one, ...) through the web editor's view, which
 	// returns early without one
 	if (isPresentation) {
+		// Nor is there an animation pane; the web editor's would keep the first document's
+		// slides when co-editing loads the server's version
+		api.WordControl.m_oAnimPaneApi = null;
+		// The page fits its zoom after layout, drawing the slide on its canvas (which fails
+		// when co-editing loads the server's version); the engine draws slides itself
+		api.WordControl.CalculateDocumentSize = function () {};
 		api.WordControl.GoToPage = function (slide) {
 			if (slide < 0 || slide >= logicDocument.GetSlidesCount())
 				return;
@@ -748,7 +1004,7 @@ window["eoStartEngine"] = function () {
 	};
 
 	var engine = window["eoEngine"] = {};
-	coEditingCommands(engine, api);
+	coEditingCommands(engine, api, allPagesChanged);
 	// Texts sdkjs puts into documents (table of contents, headers, placeholders), by their English text
 	engine["setTranslations"] = function (map) {
 		AscCommon.translateManager.init(map);
@@ -957,6 +1213,7 @@ window["eoStartEngine"] = function () {
 		} catch (e) {
 			state["link"] = null;
 		}
+		state["coEditing"] = engine["coEditingState"]();
 		var result = JSON.stringify(state);
 		state["dirtyPages"] = {};
 		state["layoutChanged"] = false;
@@ -2116,7 +2373,8 @@ window["eoStartEngine"]();
 function spreadsheetEngine(window, api) {
 	var native = window["native"];
 	var engine = window["eoEngine"] = {};
-	coEditingCommands(engine, api);
+	coEditingCommands(engine, api, function () { changed = true; }, true);
+	engine["tick"] = runTimers;
 	// Texts sdkjs puts into documents (table of contents, headers, placeholders), by their English text
 	engine["setTranslations"] = function (map) {
 		AscCommon.translateManager.init(map);
@@ -2289,7 +2547,8 @@ function spreadsheetEngine(window, api) {
 			"search": search,
 			"link": cellLink(),
 			"chart": engine["chartState"](),
-			"openUrl": openUrl
+			"openUrl": openUrl,
+			"coEditing": engine["coEditingState"]()
 		};
 		changed = false;
 		geometryChanged = false;

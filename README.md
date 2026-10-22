@@ -94,18 +94,22 @@ Then:
 
 ## Co-editing
 
-Documents of an integration (Nextcloud with the Euro-Office connector) are co-edited through the Document Server, with sdkjs' own co-authoring client (DocsCoApi), like in the web editors. `engine.js` (`coEditingCommands`):
+Documents, presentations and spreadsheets of an integration (Nextcloud with the Euro-Office connector) are co-edited through the Document Server, with sdkjs' own co-authoring client (DocsCoApi), like in the web editors. `engine.js` (`coEditingCommands`):
 
-- **Socket:** sdkjs takes `window.io` as its socket.io client. The engine's socket queues what sdkjs sends (`coTakeOutbox`); the app carries it over socket.io (path `<server>/doc/<key>/c`, sdkjs' `auth` options) and passes the server's events back (`coReceive`).
+- **Socket:** sdkjs takes `window.io` as its socket.io client. The engine's socket queues what sdkjs sends (`coTakeOutbox`); the app carries it over socket.io (path `<server>/doc/<key>/c`, sdkjs' `auth` options) and passes the server's events back (`coReceive`). The app's socket reconnects with sdkjs' settings (`reconnection`) and the tokens sdkjs changes (`auth`); sdkjs then authenticates again and catches up.
 - **Opening:** `coOpen(config)` with the editor configuration of the integration (`/ocs/v2.php/apps/eurooffice/api/v1/config/<fileId>`). After the license, sdkjs opens the document; the server sends `documentOpen` with the URL of its `Editor.bin`. The app downloads it first and tells the engine (`coSetFile`), because sdkjs would load it over the web.
-- **Object ids:** changes name the objects they change by id, so a client must give the objects the ids the web editors give. docbuilder's load does (the web editors' load doesn't, from where the engine is), so the server's version is loaded the way docbuilder loads, from the id docbuilder started with. The document is a new object then: the engine starts again on it (`eoStartEngine`, `coTakeReloaded` tells the app).
-- **Changes** go to the server once a second (`coTick`, the web editors' 40 ms interval); docbuilder's redirection of changes to itself is undone.
+- **Object ids:** changes name the objects they change by id, so a client must give the objects the ids the web editors give. The server's version is loaded the way docbuilder loads, from the id the web editors' load starts with: docbuilder's start for documents, one less for presentations, 1 for spreadsheets. The table of objects keeps its id (1): changes that add objects are addressed to it. The document is a new object then: the engine starts again on it (`eoStartEngine`, `coTakeReloaded` tells the app). The web editor's page code that runs on the way (presentations: panes, zoom, thumbnails) is skipped or fails harmlessly.
+- **Changes** go to the server once a second (`coTick`, the web editors' 40 ms interval); docbuilder's redirection of changes to itself is undone. Timers keep their delays: sdkjs gives up waiting for the server's answers (locks, saving) after one.
+- **Session:** `coEditingState` (also in the state) has the participants, others' cursors (page millimeters) and the connection (reconnecting, or disconnected: sdkjs only views then). Parts others locked are framed in red.
+- **Pictures:** sdkjs learns the URLs of the document's pictures and of those others add; the app downloads them into the images directory (outbox `fetch`, then `coImageLoaded`). A picture to insert is uploaded to the server first (`coUploadInfo`: `POST <server>/upload/<documentId>`, bearer token), then inserted by the name the server gave it (`coAddUrls`, `insertImage`).
 
-`tools/coedit/` checks this on the host: `driver.mjs` runs `eo-render` (`EO_REPL=1`, one script per line) in a session as the app will; `browser.mjs` is a web editor in the same session (Playwright). With the development environment of DocumentServer (Nextcloud with the connector):
+`tools/coedit/check.mjs` checks all this on the host: the engine (`eo-render` with `EO_REPL=1`, one script per line, `engine.mjs`) and a web editor (Playwright, `web.mjs`) edit a document together, both ways, with pictures; then the document the Document Server saved must have both's edits. A small storage (`storage.mjs`) stands in for the integration: it serves the documents, signs editor configurations with the server's secret and takes the server's callback. With a Document Server on port 8090 (for example the development environment of DocumentServer) that reaches this machine at `<host>`:
 
 ```sh
-cd engine/tools/coedit && npm install && npx playwright install chromium && cd -
-export RUN_ENGINE="docker run -i --rm --network host -v $PWD:/src -w /src -e LD_LIBRARY_PATH=/src/build/work/host/package -e EO_REPL=1 eo-core-base:desktop build/work/host/engine/eo-render build/work/host/package {doc} build/work/coedit 1"
-node editors-android/engine/tools/coedit/browser.mjs http://localhost:8081 admin admin file.docx ids 40 &
-node editors-android/engine/tools/coedit/driver.mjs http://localhost:8081 admin admin file.docx type
+cd editors-android/engine/tools/coedit && npm ci && npx playwright install chromium && cd -
+export RUN_ENGINE="docker run -i --rm --network host --user $(id -u):$(id -g) -v $PWD:/src -w /src -e LD_LIBRARY_PATH=/src/build/work/host/package -e EO_REPL=1 eo-core-base:desktop build/work/host/engine/eo-render build/work/host/package {doc} build/work/coedit/engine 1"
+node editors-android/engine/tools/coedit/check.mjs --document-server http://localhost:8090 --secret <JWT secret> \
+    --storage-url http://<host>:8095 document-templates/sample/sample.docx document-templates/sample/sample.pptx document-templates/sample/sample.xlsx
 ```
+
+With `--nextcloud http://localhost:8081 --user admin --password admin <path in Nextcloud>` instead, it uses Nextcloud and the connector as the app does. `VERBOSE=1` logs the session; `TRACE_SCRIPT=<file>` runs a script in the engine before it joins.
