@@ -718,8 +718,10 @@ function coEditingCommands(engine, api, repaint, repaintOnMessages) {
 		info.put_CallbackUrl(editorConfig["callbackUrl"]);
 		info.put_Mode(editorConfig["mode"]);
 		info.put_UserInfo(user);
-		if (editorConfig["coEditing"] && info.put_CoEditingMode)
-			info.put_CoEditingMode(editorConfig["coEditing"]["mode"]);
+		// Fast unless the integration says otherwise, as in web-apps (the connector leaves it out
+		// for viewers, who get the others' changes only in fast co-editing)
+		if (info.put_CoEditingMode)
+			info.put_CoEditingMode((editorConfig["coEditing"] && editorConfig["coEditing"]["mode"]) || "fast");
 		api.asc_setDocInfo(info);
 		// After the server's license the document is opened, as web-apps does (once: the
 		// permissions may come again, and each load starts an action that blocks saving)
@@ -767,6 +769,11 @@ function coEditingCommands(engine, api, repaint, repaintOnMessages) {
 		// Changes go to the others at once (fast co-editing), sent each second
 		api.asc_SetFastCollaborative(true);
 		api.asc_setAutoSaveGap(1);
+		// Someone who may only view joins as a viewer, as in web-apps: sdkjs applies the others'
+		// changes as they come (live viewer) and edits nothing
+		co.viewing = editorConfig["mode"] === "view";
+		if (co.viewing)
+			api.asc_setViewMode(true);
 		// The real client (in docbuilder sdkjs would work offline)
 		api.CoAuthoringApi.set_url(null);
 		api._coAuthoringInit();
