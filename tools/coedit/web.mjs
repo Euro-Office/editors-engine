@@ -41,6 +41,9 @@ export async function joinWithBrowser({ url, nextcloud = null, log = () => {} })
     const type = await run(() => Asc.editor.isPdfEditor && Asc.editor.isPdfEditor() ? "pdf"
         : Asc.editor.editorId === AscCommon.c_oEditorId.Presentation ? "slide"
         : Asc.editor.editorId === AscCommon.c_oEditorId.Spreadsheet ? "cell" : "word");
+    // Fast co-editing, as a user picks it: without coEditing in the config (Nextcloud's), the web
+    // PDF editor starts in strict co-editing and shows others' changes only when it saves
+    await run(() => AscCommon.CollaborativeEditing.Is_Fast() || Asc.editor.asc_SetFastCollaborative(true));
 
     const participant = {
         run,

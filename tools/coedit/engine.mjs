@@ -149,8 +149,10 @@ export async function joinWithEngine({ config, documentPath, workDir, runEngine,
         /** Types at the start of the document (presentations: of the first text box on the first slide; spreadsheets: into A1; PDFs: a note). */
         async type(text) {
             if (type === "pdf") {
-                return run(`eoEngine.setCommentUser("engine", "Engine"); eoEngine.mouse(0, 0, 20, 20, 1, false, false); ` +
-                    `eoEngine.mouse(2, 0, 20, 20, 1, false, false); eoEngine.addComment(${q(text.trim())}); ''`);
+                // Somewhere else each time: a note there gets the comment as a reply
+                const x = 20 + Math.floor(Math.random() * 150), y = 40 + Math.floor(Math.random() * 200);
+                return run(`eoEngine.setCommentUser("engine", "Engine"); eoEngine.mouse(0, 0, ${x}, ${y}, 1, false, false); ` +
+                    `eoEngine.mouse(2, 0, ${x}, ${y}, 1, false, false); eoEngine.addComment(${q(text.trim())}); ''`);
             }
             if (type === "slide") {
                 // The first text box that takes a cursor (others are on the slide's layout)

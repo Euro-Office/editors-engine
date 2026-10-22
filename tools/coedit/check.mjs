@@ -159,6 +159,8 @@ async function check(source, path) {
         debug("web joined:", await web.text());
 
         await until("the engine sees the web editor", async () => (await engine.session()).participants.filter((p) => !p.me).length > 0);
+        // PDFs: the pages are drawn from the server's file, which the engine opened instead
+        if (kind === "pdf" && !(await engine.render(0, renderPath) >= 0)) throw new Error("the engine doesn't draw the server's file");
         // Both numbered the document's objects alike (changes name objects by id)
         if (kind !== "xlsx") {
             const lastId = {
