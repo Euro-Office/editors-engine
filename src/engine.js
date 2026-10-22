@@ -578,17 +578,11 @@ function coEditingCommands(engine, api, repaint, repaintOnMessages) {
 		};
 	}
 
-	// The id docbuilder's load started with: the document object is its first new object.
-	// Presentations: the web editors' load gives the presentation one id less than
-	// docbuilder's (and so all objects after it)
+	// The web editors number objects from 0 until the user is known, and load the document right
+	// after the table of objects (id 1): the document's objects are numbered from there, by the
+	// same code that loads it here
 	var isSpreadsheet = api.editorId === AscCommon.c_oEditorId.Spreadsheet;
-	if (co.idStart === undefined && api.WordControl && api.WordControl.m_oLogicDocument) {
-		var isPresentation = api.editorId === AscCommon.c_oEditorId.Presentation;
-		co.idStart = Number(api.WordControl.m_oLogicDocument.Get_Id()) - (isPresentation ? 2 : 1);
-	}
-	// Spreadsheets: the web editors load them right after the table of objects (id 1)
-	if (co.idStart === undefined && isSpreadsheet)
-		co.idStart = 1;
+	var ID_START = 1;
 
 	// Loading a document sets up the web editor's text input element and touch scrolling; the
 	// app has its own
@@ -641,7 +635,7 @@ function coEditingCommands(engine, api, repaint, repaintOnMessages) {
 		table.Id = tableId;
 		table.m_aPairs[tableId] = table;
 		counter.Clear();
-		counter.m_nIdCounterLoad = co.idStart;
+		counter.m_nIdCounterLoad = ID_START;
 		counter.Set_Load(true);
 		// Presentations: the web editor's page (panes, scroll bars) was set up with the first
 		// document; again it fails without a page
