@@ -26,4 +26,20 @@ t.run("comments", function () {
 	t.eq("resolved", added["solved"], true);
 });
 t.noError("structure");
+t.run("delete a chart", function () {
+	// A tap selects the part of the chart under it too (here its legend): Delete removes the chart
+	var logicDocument = Asc.editor.WordControl.m_oLogicDocument;
+	function charts() {
+		return logicDocument.GetAllDrawingObjects().filter(function (drawing) {
+			return drawing.GraphicObj && drawing.GraphicObj.getObjectType() === AscDFH.historyitem_type_ChartSpace;
+		});
+	}
+	var chart = charts()[0];
+	var bounds = chart.GraphicObj.bounds;
+	click(chart.PageNum, (bounds.l + bounds.r) / 2, (bounds.t + bounds.b) / 2);
+	t.eq("chart selected", t.state()["drawings"].length, 1);
+	var before = charts().length;
+	eoEngine.keyDown(46, false, false);
+	t.eq("chart deleted", charts().length, before - 1);
+});
 t.done();

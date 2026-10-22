@@ -1274,7 +1274,21 @@ window["eoStartEngine"] = function () {
 	};
 
 	// Keys with web key codes (8 backspace, 13 enter, 37-40 arrows, 46 delete, ...)
+	// A tap on a chart also selects the part of it under the finger (legend, title, ...), which
+	// Delete, Backspace, copy and cut would take instead: they take the chart, unless its text
+	// is edited
+	function selectWholeChart() {
+		var controller = editor.drawingController();
+		var chart = controller && controller.selection && controller.selection.chartSelection;
+		if (!chart || chart.selection.textSelection)
+			return;
+		chart.resetSelection();
+		controller.selection.chartSelection = null;
+	}
+
 	engine["keyDown"] = function (keyCode, shift, ctrl) {
+		if (keyCode === 8 || keyCode === 46)
+			selectWholeChart();
 		var e = new AscCommon.CKeyboardEvent();
 		e.KeyCode = keyCode;
 		e.ShiftKey = shift;
@@ -1331,6 +1345,7 @@ window["eoStartEngine"] = function () {
 	AscCommon.g_specialPasteHelper.Init(api);
 
 	engine["copy"] = function () {
+		selectWholeChart();
 		var data = {};
 		api.asc_CheckCopy({
 			"pushData": function (format, value) {
@@ -1346,6 +1361,7 @@ window["eoStartEngine"] = function () {
 	};
 
 	engine["cut"] = function () {
+		selectWholeChart();
 		api.asc_SelectionCut();
 	};
 
