@@ -363,7 +363,9 @@ function pdfEngine(api) {
 		viewer.endVisiblePage = viewer.file.pages.length - 1;
 		viewer.updatePageDetector();
 		doc.UpdatePagesTransform();
-		viewer.currentPage = Math.min(viewer.currentPage || 0, viewer.file.pages.length - 1);
+		// sdkjs sets it while painting the visible pages (not here: the app sets it as pages come
+		// into view); deleting and locks need one from the start, the viewer starts with -1
+		viewer.currentPage = Math.max(0, Math.min(viewer.currentPage | 0, viewer.file.pages.length - 1));
 		state["layoutChanged"] = true;
 	}
 
@@ -726,6 +728,8 @@ function pdfEngine(api) {
 		global.Y = e.Y = p[1];
 		lastPoint = { page: page, x: x, y: y };
 		if (type === 0) {
+			// The page touched is the current one (sdkjs checks its locks, adds text boxes there)
+			viewer.currentPage = page;
 			viewer.isMouseDown = true;
 			viewer.mouseDownCoords.X = p[0];
 			viewer.mouseDownCoords.Y = p[1];
