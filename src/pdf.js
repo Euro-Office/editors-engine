@@ -754,7 +754,14 @@ function pdfEngine(api) {
 	}
 
 	var lastPoint = { page: 0, x: 10, y: 10 };
+	// The word being composed stays where it was typed when something else gets the typing
+	function finishComposing() {
+		if (api.compositeInput)
+			engine["finishComposingText"]();
+	}
+
 	engine["mouse"] = function (type, page, x, y, clickCount, addToSelection, extend) {
+		finishComposing();
 		loadText(page);
 		var p = toViewer(page, x, y);
 		var e = mouseEvent(type, clickCount, addToSelection, extend);
@@ -819,9 +826,7 @@ function pdfEngine(api) {
 	};
 
 	engine["keyDown"] = function (keyCode, shift, ctrl) {
-		// The word being composed stays where it is (see engine.js)
-		if (api.compositeInput)
-			engine["finishComposingText"]();
+		finishComposing();
 		var e = new AscCommon.CKeyboardEvent();
 		e.KeyCode = keyCode;
 		e.ShiftKey = shift;
@@ -946,6 +951,7 @@ function pdfEngine(api) {
 	// sdkjs centers it on the part of the page shown (getViewingRect), here that point; it may
 	// add it later, once its font is loaded
 	engine["addFreeText"] = function (page, x, y) {
+		finishComposing();
 		var size = pageSize(page);
 		var point = { x: x / size[0], y: y / size[1] };
 		point.r = point.x;
@@ -1031,6 +1037,7 @@ function pdfEngine(api) {
 	// A picture from the images directory (name, size in pixels) on the page at (x, y) with
 	// the size (width, height) in mm: a drawn signature
 	engine["placeImage"] = function (name, widthPx, heightPx, page, x, y, width, height) {
+		finishComposing();
 		preloadImage(api, name, widthPx, heightPx);
 		viewer.currentPage = page;
 		// sdkjs places it in the middle of the page, at its size there

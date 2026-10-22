@@ -37,6 +37,19 @@ t.run("places the pages for taps into text boxes", function () {
 	t.eq("a place per page", drawingDocument.m_arrPages.length, eoEngine.getPageCount());
 	t.ok("points convert", !drawingDocument.ConvertCoordsToCursorWR(10, 10, 0).Error);
 });
+t.run("adds a text box while a word is composed", function () {
+	// Out of the way of the other tests' boxes
+	eoEngine.addFreeText(0, 170, 30);
+	eoEngine.setComposingText("one");
+	eoEngine.addFreeText(0, 170, 270);
+	eoEngine.setComposingText("two");
+	eoEngine.finishComposingText();
+	var doc = Asc.editor.getPDFDoc();
+	var text = function (annot) { return annot.GetDocContent().GetText({ ParaSeparator: "" }); };
+	t.eq("the first keeps its word", text(doc.annots[doc.annots.length - 2]), "one");
+	t.eq("the second has its own", text(doc.annots[doc.annots.length - 1]), "two");
+	click(0, 150, 250);
+});
 t.run("copies, pastes and deletes a text box", function () {
 	var count = annotations();
 	click(0, 60, 80);
