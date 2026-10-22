@@ -2626,8 +2626,10 @@ function spreadsheetEngine(window, api) {
 		engine[name] = edit(engine[name]);
 	});
 
-	// Comments on cells: [{id, text, user, time, quote, solved, replies, sheet, col, row}]. Added
-	// and changed without sdkjs' lock (co-editing), which waits for a server here.
+	// Comments on cells: [{id, text, user, time, quote, solved, replies, sheet, col, row}]. While
+	// co-editing they are locked on the server first (sdkjs changes them when it answers, and the
+	// sheet is drawn again then); without a session sdkjs' lock would wait for one.
+	function noLock() { return !(window["eoCoState"] && window["eoCoState"].socket); }
 	var commentUser = { "id": "", "name": "" };
 	engine["setCommentUser"] = function (id, name) { commentUser = { "id": id, "name": name }; };
 	function sheetComment(id) {
@@ -2657,7 +2659,7 @@ function spreadsheetEngine(window, api) {
 		var cell = ws.model.selectionRange.activeCell;
 		data.asc_putCol(cell.col);
 		data.asc_putRow(cell.row);
-		ws.cellCommentator.addComment(data, true);
+		ws.cellCommentator.addComment(data, noLock());
 	});
 	// The comment's sheet becomes the active one
 	function changeComment(id, change) {
@@ -2668,7 +2670,7 @@ function spreadsheetEngine(window, api) {
 			api.asc_showWorksheet(found.sheet);
 		var data = found.comment.clone();
 		change(data);
-		view().cellCommentator.changeComment(id, data, false, false, true);
+		view().cellCommentator.changeComment(id, data, false, false, noLock());
 	}
 	engine["replyComment"] = edit(function (id, text) {
 		changeComment(id, function (data) { data.asc_addReply(newCommentData(Asc.asc_CCommentData, commentUser, text)); });
@@ -2682,7 +2684,7 @@ function spreadsheetEngine(window, api) {
 			return;
 		if (found.sheet !== api.wb.model.getActive())
 			api.asc_showWorksheet(found.sheet);
-		view().cellCommentator.removeComment(id, false, true);
+		view().cellCommentator.removeComment(id, false, noLock());
 	});
 	engine["gotoComment"] = function (id) {
 		var found = sheetComment(id);
