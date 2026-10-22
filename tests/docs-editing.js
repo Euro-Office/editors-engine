@@ -29,5 +29,13 @@ t.run("mouse", function () {
 	eoEngine.mouse(2, 0, block.left + 30, y, 1, false, true);
 	t.ok("Shift+click extends the selection", t.state()["selection"].length > 0);
 });
+t.run("adds a text box", function () {
+	eoEngine.insertShape("textRect");
+	eoEngine.enterText("A text box");
+	t.ok("the text in it", Asc.editor.WordControl.m_oLogicDocument.GetAllDrawingObjects().some(function (drawing) {
+		var content = drawing.GraphicObj.getDocContent && drawing.GraphicObj.getDocContent();
+		return content && content.GetText().indexOf("A text box") >= 0;
+	}));
+});
 t.noError("editing");
 t.done();

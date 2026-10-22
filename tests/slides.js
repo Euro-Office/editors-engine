@@ -12,5 +12,15 @@ t.run("slides", function () {
 	t.eq("deleted", JSON.parse(eoEngine.getSlides()).length, count);
 	t.ok("text on slide 1", JSON.parse(eoEngine.textBlocks(0)).length > 0);
 });
+t.run("adds a text box", function () {
+	eoEngine.insertShape("textRect");
+	eoEngine.enterText("A text box");
+	t.ok("the text in it", Asc.editor.WordControl.m_oLogicDocument.Slides.some(function (slide) {
+		return slide.cSld.spTree.some(function (shape) {
+			var content = shape.getDocContent && shape.getDocContent();
+			return content && content.GetText().indexOf("A text box") >= 0;
+		});
+	}));
+});
 t.noError("slides");
 t.done();
