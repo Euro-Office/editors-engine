@@ -704,6 +704,7 @@ function pdfEngine(api) {
 		});
 	}
 
+	var shownAnnot = null;
 	engine["getState"] = function () {
 		storePendingTextBoxes();
 		// The cursor, as the viewer places it when it paints (see stopPainting), in text laid
@@ -721,9 +722,11 @@ function pdfEngine(api) {
 		state["layoutPending"] = false;
 		state["currentPage"] = -1;
 		state["pdf"] = pdfState();
-		// The selected annotation's comment, as the other editors show comments
+		// The comment of an annotation just selected, reported once as the other editors report theirs
 		var annot = doc.mouseDownAnnot;
-		state["shownComments"] = annot && annot.GetAscCommentData && annot.GetAscCommentData() ? [String(annot.GetId())] : [];
+		var commented = annot && annot.GetAscCommentData && annot.GetAscCommentData() ? String(annot.GetId()) : null;
+		state["shownComments"] = commented && commented !== shownAnnot ? [commented] : [];
+		shownAnnot = commented;
 		state["coEditing"] = engine["coEditingState"] ? engine["coEditingState"]() : null;
 		var result = JSON.stringify(state);
 		state["dirtyPages"] = {};

@@ -23,7 +23,8 @@ t.run("comments selected text on a highlight", function () {
 	t.eq("of the highlight type", highlight.GetType(), AscPDF.ANNOTATIONS_TYPES.Highlight);
 	var comment = JSON.parse(eoEngine.getComments()).filter(function (comment) { return comment.text === "On the text"; })[0];
 	t.eq("the comment on it", comment && comment.id, String(highlight.GetId()));
-	t.eq("shown while it is selected", t.state().shownComments.join(), String(highlight.GetId()));
+	t.eq("shown once it is selected", t.state().shownComments.join(), String(highlight.GetId()));
+	t.eq("reported once", t.state().shownComments.length, 0);
 });
 t.run("adds a note", function () {
 	eoEngine.setCommentUser("tester", "Tester");

@@ -22,11 +22,10 @@ t.run("comments", function () {
 	var added = comments.filter(function (comment) { return comment["text"] === "A comment"; })[0];
 	t.ok("the new comment", !!added);
 	t.eq("on the word", added["quote"], "Commented");
-	// The comments sdkjs shows (on a tap into their text, once the page is drawn) are in the state
+	// The comments sdkjs shows (on a tap into their text, once the page is drawn) are in the state once
 	Asc.editor.sync_ShowComment([added["id"]], 0, 0);
 	t.eq("shown", t.state()["shownComments"].join(), added["id"]);
-	Asc.editor.sync_HideComment();
-	t.eq("hidden", t.state()["shownComments"].length, 0);
+	t.eq("reported once", t.state()["shownComments"].length, 0);
 	eoEngine.replyComment(added["id"], "A reply");
 	eoEngine.resolveComment(added["id"], true);
 	added = JSON.parse(eoEngine.getComments()).filter(function (comment) { return comment["id"] === added["id"]; })[0];

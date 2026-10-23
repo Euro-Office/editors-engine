@@ -1638,6 +1638,7 @@ window["eoStartEngine"] = function () {
 		state["layoutChanged"] = false;
 		state["error"] = null;
 		state["openUrl"] = null;
+		state["shownComments"] = [];
 		return result;
 	};
 
@@ -2577,12 +2578,11 @@ window["eoStartEngine"] = function () {
 	// Commented text is highlighted
 	if (!isPresentation)
 		api.asc_showComments(true);
-	// The comments sdkjs shows (a tap into commented text): their ids, until it hides them
+	// The comments sdkjs shows (a tap into commented text): their ids, reported once
 	state["shownComments"] = [];
 	api.asc_registerCallback("asc_onShowComment", function (ids) {
 		state["shownComments"] = (ids || []).map(String);
 	});
-	api.asc_registerCallback("asc_onHideComment", function () { state["shownComments"] = []; });
 
 	chartCommands(engine, api, {
 		selectedDrawings: function () { return editor.selectedDrawings(); },
