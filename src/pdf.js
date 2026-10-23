@@ -804,9 +804,16 @@ function pdfEngine(api) {
 		if (textController && textController.IsNeedRecalc && textController.IsNeedRecalc() && textController.Recalculate)
 			textController.Recalculate();
 		viewer._checkTargetUpdate();
+		// The cursor in a text box: the viewer places it when it draws its overlay (see stopPainting)
+		var editedBox = textDrawing() && doc.GetController().getTargetDocContent() ? textDrawing() : null;
+		if (editedBox)
+			editedBox.updateSelectionState();
 		collectDirtyPages();
 		state["selection"] = textSelection().concat(textBoxSelection(), search ? searchMatch : []);
 		state["drawings"] = drawingFrames();
+		// The frame of the text box whose text is edited, as the web editor outlines it
+		state["textFrame"] = editedBox && editedBox.transform
+			? { "page": editedBox.GetPage(), "points": drawingFrame(editedBox.transform, editedBox.extX, editedBox.extY) } : null;
 		state["modified"] = api.isDocumentModified();
 		state["interface"]["CanUndo"] = doc.History.Can_Undo();
 		state["interface"]["CanRedo"] = doc.History.Can_Redo();
@@ -841,7 +848,9 @@ function pdfEngine(api) {
 			"annotation": annot ? { "id": annot.GetId(), "type": annot.GetType(), "comment": !!annot.GetContents() } : null,
 			"textSelected": viewer.file.isSelectionUse() && !doc.activeDrawing,
 			// A text box or its text: the text's formatting applies (formatState)
-			"textBox": !!textDrawing()
+			"textBox": !!textDrawing(),
+			// The current page's text can be made editable (editPage)
+			"canEditPage": engine["canEditPage"](viewer.currentPage)
 		};
 	}
 

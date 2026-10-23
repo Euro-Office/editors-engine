@@ -14,6 +14,7 @@ function textBox(part) {
 
 t.eq("the PDF editor", eoEngine.kind, "pdf");
 t.ok("the page can be edited", eoEngine.canEditPage(0));
+t.ok("as the state says", t.state().pdf.canEditPage === true);
 t.eq("drawn from the file", eoEngine.pageOrigin(0), 0);
 
 t.run("makes the page editable", function () {
@@ -24,6 +25,7 @@ t.run("makes the page editable", function () {
 	t.ok("its text in text boxes", textBox("key tools") !== null);
 	t.eq("drawn by sdkjs", eoEngine.pageOrigin(0), -1);
 	t.ok("not again", !eoEngine.canEditPage(0));
+	t.ok("as the state says", t.state().pdf.canEditPage === false);
 	t.ok("an undo step", state.interface.CanUndo === true);
 });
 
@@ -58,7 +60,12 @@ t.run("undoes and redoes it", function () {
 t.run("edits its text", function () {
 	var box = textBox("key tools");
 	box.Recalculate();
-	click(0, box.x + 1, box.y + box.extY / 2);
+	click(0, box.x + 30, box.y + 3);
+	var tapped = t.state();
+	t.ok("a cursor at once", tapped.cursor !== null && tapped.cursor.page === 0);
+	t.ok("where tapped", tapped.cursor !== null && Math.abs(tapped.cursor.x1 - (box.x + 30)) < 3 && tapped.cursor.y1 < box.y + 3 && tapped.cursor.y2 > box.y + 3);
+	t.ok("the text box framed", tapped.textFrame !== null && Math.abs(tapped.textFrame.points[0] - box.x) < 0.5);
+	t.eq("not as a selected picture", tapped.drawings.length, 0);
 	eoEngine.keyDown(36, false, true);
 	eoEngine.commitText("Edited ");
 	t.noError("typing");
