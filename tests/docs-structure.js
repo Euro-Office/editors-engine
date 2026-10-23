@@ -32,6 +32,27 @@ t.run("comments", function () {
 	t.eq("reply", added["replies"].length, 1);
 	t.eq("resolved", added["solved"], true);
 });
+t.run("notes", function () {
+	// Closing a note goes back to just after its reference in the text
+	[["footnote", eoEngine.addFootnote], ["endnote", eoEngine.addEndnote]].forEach(function (kind) {
+		eoEngine.keyDown(35, false, true);
+		eoEngine.commitText("Noted ");
+		kind[1]();
+		eoEngine.commitText("The " + kind[0]);
+		t.ok("in the " + kind[0], t.state()["structure"]["inNote"]);
+		eoEngine.endNoteEditing();
+		t.ok("out of the " + kind[0], !t.state()["structure"]["inNote"]);
+		eoEngine.commitText("X");
+		// The paragraph's text, references as ^
+		var text = "";
+		Asc.editor.WordControl.m_oLogicDocument.GetCurrentParagraph().Content.forEach(function (run) {
+			(run.Content || []).forEach(function (item) {
+				text += item.GetFootnote ? "^" : item.Value ? String.fromCharCode(item.Value) : "";
+			});
+		});
+		t.ok("after the reference (" + kind[0] + ")", /Noted \^X$/.test(text));
+	});
+});
 t.noError("structure");
 t.run("delete a chart", function () {
 	// A tap selects the part of the chart under it too (here its legend): Delete removes the chart
