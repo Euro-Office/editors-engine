@@ -1154,6 +1154,16 @@ function coEditingCommands(engine, api, repaint, repaintOnMessages) {
 		if (api.isDocumentLoadComplete)
 			api._autoSave();
 	};
+	// Before leaving the session: the changes not sent yet go now, not when sdkjs would send them
+	// (a second or two after the last one). True while some still wait for the server's answer;
+	// the app asks again (carrying the outbox) until none do
+	engine["coFlush"] = function () {
+		if (!api.isDocumentLoadComplete || !co.socket)
+			return false;
+		if (api.canSave && api._haveChanges())
+			api.asc_Save(true);
+		return !api.canSave || api._haveChanges();
+	};
 
 	// What sdkjs sends, as JSON: [{type: "connect", options} | {type: "emit", name, data} |
 	// {type: "disconnect"} | {type: "auth", auth: {token, session}} (new tokens for reconnecting) |
