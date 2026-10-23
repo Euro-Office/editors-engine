@@ -807,6 +807,32 @@ function themeFontName(theme, name) {
 	return name && scheme && scheme.checkFont ? scheme.checkFont(name) : name || "";
 }
 
+// Color schemes ("Office", "Grayscale", ...: the theme's colors), as web-apps lists them: the
+// built-in ones and the document's. Choosing one recolors what uses the theme's colors.
+function colorSchemeCommands(engine, api, changed) {
+	function hex(value) {
+		return (value < 16 ? "0" : "") + value.toString(16).toUpperCase();
+	}
+	// {current: index or -1, schemes: [{name, colors: ["RRGGBB"]}]}
+	engine["getColorSchemes"] = function () {
+		var theme = api.getCurrentTheme();
+		var found = theme ? api.getColorSchemes(theme) : { schemes: [], index: -1 };
+		return JSON.stringify({
+			"current": found.index,
+			"schemes": found.schemes.map(function (scheme) {
+				return {
+					"name": scheme.get_name() || "",
+					"colors": scheme.get_colors().map(function (color) { return hex(color.get_r()) + hex(color.get_g()) + hex(color.get_b()); })
+				};
+			})
+		});
+	};
+	engine["setColorScheme"] = function (index) {
+		api.asc_ChangeColorSchemeByIdx(index);
+		changed();
+	};
+}
+
 function coEditingCommands(engine, api, repaint, repaintOnMessages) {
 	var co = window["eoCoState"] = window["eoCoState"] || {
 		outbox: [], socket: null, files: {}, loading: false,
@@ -2169,6 +2195,18 @@ window["eoStartEngine"] = function () {
 		allPagesChanged();
 	};
 
+	colorSchemeCommands(engine, api, allPagesChanged);
+	// Presentations: the slides' size in mm
+	engine["getSlideSize"] = function () {
+		return JSON.stringify({ "width": api.get_PresentationWidth() / 36000, "height": api.get_PresentationHeight() / 36000 });
+	};
+	// 16:9 or 4:3, the height kept, as web-apps changes it
+	engine["setSlideSize"] = function (wide) {
+		var height = api.get_PresentationHeight();
+		api.changeSlideSize(height * (wide ? 16 / 9 : 4 / 3), height, wide ? Asc.c_oAscSlideSZType.SzCustom : Asc.c_oAscSlideSZType.SzScreen4x3);
+		allPagesChanged();
+	};
+
 	engine["addFootnote"] = function () { api.asc_AddFootnote(); };
 	engine["addEndnote"] = function () { api.asc_AddEndnote(); };
 	// From a note back to its reference in the text
@@ -3082,6 +3120,7 @@ function spreadsheetEngine(window, api) {
 	var native = window["native"];
 	var engine = window["eoEngine"] = {};
 	coEditingCommands(engine, api, function () { changed = true; }, true);
+	colorSchemeCommands(engine, api, function () { changed = true; });
 	engine["tick"] = runTimers;
 	// Texts sdkjs puts into documents (table of contents, headers, placeholders), by their English text
 	engine["setTranslations"] = function (map) {
@@ -3187,7 +3226,7 @@ function spreadsheetEngine(window, api) {
 		pageData.pageHeight = rows[r2 + 1] - rows[r1];
 		pageData.pageClipRectWidth = pageData.pageWidth / PX_TO_MM;
 		pageData.pageClipRectHeight = pageData.pageHeight / PX_TO_MM;
-		pageData.pageGridLines = true;
+		pageData.pageGridLines = api.asc_getSheetViewSettings().asc_getShowGridLines();
 		pageData.scale = 1;
 		pageData.indexWorksheet = api.asc_getActiveWorksheetIndex();
 
@@ -3207,6 +3246,27 @@ function spreadsheetEngine(window, api) {
 
 	// The sheet is drawn again (also when co-editing starts the engine again)
 	var changed = true;
+
+	// The active sheet's gridlines, and its pages' orientation and size (mm, portrait) for printing
+	engine["getSheetSetup"] = function () {
+		var setup = api.asc_getPageOptions(api.asc_getActiveWorksheetIndex()).asc_getPageSetup();
+		return JSON.stringify({
+			"gridlines": api.asc_getSheetViewSettings().asc_getShowGridLines(),
+			"landscape": setup.asc_getOrientation() === Asc.c_oAscPageOrientation.PageLandscape,
+			"width": setup.asc_getWidth(), "height": setup.asc_getHeight()
+		});
+	};
+	engine["setGridlines"] = function (show) {
+		api.asc_setDisplayGridlines(show);
+		changed = true;
+	};
+	engine["setSheetPage"] = function (setup) {
+		var index = api.asc_getActiveWorksheetIndex();
+		if (setup["landscape"] !== undefined)
+			api.asc_changePageOrient(!setup["landscape"], index);
+		if (setup["width"] !== undefined)
+			api.asc_changeDocSize(Math.min(setup["width"], setup["height"]), Math.max(setup["width"], setup["height"]), index);
+	};
 	var lastError = null;
 
 	function sheetState() {

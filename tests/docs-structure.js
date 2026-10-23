@@ -32,6 +32,13 @@ t.run("comments", function () {
 	t.eq("reply", added["replies"].length, 1);
 	t.eq("resolved", added["solved"], true);
 });
+t.run("color schemes", function () {
+	var schemes = JSON.parse(eoEngine.getColorSchemes());
+	t.ok("listed", schemes["schemes"].length > 5 && schemes["current"] >= 0);
+	var other = schemes["current"] === 1 ? 2 : 1;
+	eoEngine.setColorScheme(other);
+	t.eq("changed", JSON.parse(eoEngine.getColorSchemes())["current"], other);
+});
 t.run("notes", function () {
 	// Closing a note goes back to just after its reference in the text
 	[["footnote", eoEngine.addFootnote], ["endnote", eoEngine.addEndnote]].forEach(function (kind) {

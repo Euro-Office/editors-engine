@@ -132,5 +132,19 @@ t.run("moves a text box dropped on the next slide there", function () {
 	t.ok("where it was dropped", moved && Math.abs(moved.y - (presentation.GetHeightMM() + 30 - 200)) < 1);
 	t.eq("the next slide is current", t.state().currentPage, 1);
 });
+t.run("presentation settings", function () {
+	var schemes = JSON.parse(eoEngine.getColorSchemes());
+	t.ok("color schemes listed", schemes["schemes"].length > 5 && schemes["schemes"][0]["colors"].length >= 6);
+	t.ok("one is current", schemes["current"] >= 0);
+	var other = schemes["current"] === 1 ? 2 : 1;
+	eoEngine.setColorScheme(other);
+	t.eq("color scheme changed", JSON.parse(eoEngine.getColorSchemes())["current"], other);
+	eoEngine.setSlideSize(false);
+	var size = JSON.parse(eoEngine.getSlideSize());
+	t.ok("4:3", Math.abs(size["width"] / size["height"] - 4 / 3) < 0.01);
+	eoEngine.setSlideSize(true);
+	size = JSON.parse(eoEngine.getSlideSize());
+	t.ok("16:9", Math.abs(size["width"] / size["height"] - 16 / 9) < 0.01);
+});
 t.noError("slides");
 t.done();

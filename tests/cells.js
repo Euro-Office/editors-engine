@@ -64,5 +64,21 @@ t.run("borders of one side", function () {
 	eoEngine.setBorders("none");
 	t.ok("none", ws.getCell3(6, 4).getBorderFull().l.s === Asc.c_oAscBorderStyles.None);
 });
+t.run("spreadsheet settings", function () {
+	var schemes = JSON.parse(eoEngine.getColorSchemes());
+	t.ok("color schemes listed", schemes["schemes"].length > 5 && schemes["schemes"][0]["colors"].length >= 6);
+	t.ok("one is current", schemes["current"] >= 0);
+	var other = schemes["current"] === 1 ? 2 : 1;
+	eoEngine.setColorScheme(other);
+	t.eq("color scheme changed", JSON.parse(eoEngine.getColorSchemes())["current"], other);
+	t.ok("gridlines shown", JSON.parse(eoEngine.getSheetSetup())["gridlines"]);
+	eoEngine.setGridlines(false);
+	t.ok("gridlines hidden", !JSON.parse(eoEngine.getSheetSetup())["gridlines"]);
+	eoEngine.setSheetPage({ "landscape": true });
+	t.ok("landscape", JSON.parse(eoEngine.getSheetSetup())["landscape"]);
+	eoEngine.setSheetPage({ "width": 148, "height": 210 });
+	var setup = JSON.parse(eoEngine.getSheetSetup());
+	t.ok("A5", Math.round(Math.min(setup["width"], setup["height"])) === 148);
+});
 t.noError("cells");
 t.done();
