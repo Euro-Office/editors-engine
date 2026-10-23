@@ -11,7 +11,9 @@ t.run("statistics", function () {
 });
 t.run("comments", function () {
 	eoEngine.keyDown(36, false, true);
-	eoEngine.keyDown(39, true, true);
+	eoEngine.commitText("Commented ");
+	eoEngine.keyDown(37, false, true);
+	eoEngine.keyDown(37, true, true); // Ctrl+Shift+Left: the word
 	eoEngine.setCommentUser("test", "Tester");
 	var before = JSON.parse(eoEngine.getComments()).length;
 	eoEngine.addComment("A comment");
@@ -19,6 +21,12 @@ t.run("comments", function () {
 	t.eq("comment added", comments.length, before + 1);
 	var added = comments.filter(function (comment) { return comment["text"] === "A comment"; })[0];
 	t.ok("the new comment", !!added);
+	t.eq("on the word", added["quote"], "Commented");
+	// The comments sdkjs shows (on a tap into their text, once the page is drawn) are in the state
+	Asc.editor.sync_ShowComment([added["id"]], 0, 0);
+	t.eq("shown", t.state()["shownComments"].join(), added["id"]);
+	Asc.editor.sync_HideComment();
+	t.eq("hidden", t.state()["shownComments"].length, 0);
 	eoEngine.replyComment(added["id"], "A reply");
 	eoEngine.resolveComment(added["id"], true);
 	added = JSON.parse(eoEngine.getComments()).filter(function (comment) { return comment["id"] === added["id"]; })[0];

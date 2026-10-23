@@ -13,6 +13,18 @@ t.run("marks the text up", function () {
 	t.eq("a highlight", annotations(), before + 1);
 	t.ok("pages to draw again", Object.keys(t.state().dirtyPages).length > 0);
 });
+t.run("comments selected text on a highlight", function () {
+	eoEngine.setCommentUser("tester", "Tester");
+	eoEngine.select(0, 10, 10, 0, 200, 60);
+	var count = annotations();
+	eoEngine.addComment("On the text");
+	t.eq("a highlight", annotations(), count + 1);
+	var highlight = Asc.editor.getPDFDoc().annots[annotations() - 1];
+	t.eq("of the highlight type", highlight.GetType(), AscPDF.ANNOTATIONS_TYPES.Highlight);
+	var comment = JSON.parse(eoEngine.getComments()).filter(function (comment) { return comment.text === "On the text"; })[0];
+	t.eq("the comment on it", comment && comment.id, String(highlight.GetId()));
+	t.eq("shown while it is selected", t.state().shownComments.join(), String(highlight.GetId()));
+});
 t.run("adds a note", function () {
 	eoEngine.setCommentUser("tester", "Tester");
 	eoEngine.mouse(0, 0, 100, 150, 1, false, false);

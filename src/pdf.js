@@ -721,6 +721,9 @@ function pdfEngine(api) {
 		state["layoutPending"] = false;
 		state["currentPage"] = -1;
 		state["pdf"] = pdfState();
+		// The selected annotation's comment, as the other editors show comments
+		var annot = doc.mouseDownAnnot;
+		state["shownComments"] = annot && annot.GetAscCommentData && annot.GetAscCommentData() ? [String(annot.GetId())] : [];
 		state["coEditing"] = engine["coEditingState"] ? engine["coEditingState"]() : null;
 		var result = JSON.stringify(state);
 		state["dirtyPages"] = {};
@@ -1002,8 +1005,16 @@ function pdfEngine(api) {
 		data.asc_putOnlyOfficeTime(String(Date.now()));
 		return data;
 	}
-	// On the selected annotation, or a note where the page was last touched
+	// On the selected annotation, or a note where the page was last touched. Selected text is
+	// highlighted and the comment goes on the highlight, as the web PDF editor comments text.
 	engine["addComment"] = function (text) {
+		if (viewer.file.isSelectionUse() && !doc.activeDrawing) {
+			var before = doc.annots.slice();
+			engine["markup"]("highlight", "FFEB3B");
+			var highlight = doc.annots.filter(function (annot) { return before.indexOf(annot) < 0; })[0];
+			if (highlight)
+				doc.SetMouseDownObject(highlight);
+		}
 		var p = toViewer(lastPoint.page, lastPoint.x, lastPoint.y);
 		AscCommon.global_mouseEvent.X = p[0];
 		AscCommon.global_mouseEvent.Y = p[1];
