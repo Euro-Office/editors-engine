@@ -1525,6 +1525,7 @@ window["eoStartEngine"] = function () {
 		"layoutChanged": false,
 		"layoutPending": false, // pages still to lay out: call tick()
 		"currentPage": -1,     // presentations: the current slide
+		"mobileView": false,   // documents: laid out for the screen (setMobileView)
 		"modified": false,     // changed since opening or the last save
 		"error": null,         // exception of the last command (see reportError), reported once
 		"interface": {}       // asc_on* values: bold, italic, canUndo, ...
@@ -1649,6 +1650,7 @@ window["eoStartEngine"] = function () {
 		state["modified"] = api.isDocumentModified();
 		state["layoutPending"] = isLayoutPending();
 		state["currentPage"] = isPresentation ? logicDocument.CurPage : -1;
+		state["mobileView"] = !!mobileView;
 		try {
 			state["format"] = formatState();
 		} catch (e) {
@@ -2278,7 +2280,8 @@ window["eoStartEngine"] = function () {
 			logicDocument.DrawingObjects.documentStatistics(page, statistics);
 		logicDocument.Content.forEach(function (element) { element.CollectDocumentStatistics(statistics); });
 		return JSON.stringify({
-			"pages": statistics.Pages, "words": statistics.Words, "paragraphs": statistics.Paragraphs,
+			// Not the screen's pages of mobile view
+			"pages": mobileView ? -1 : statistics.Pages, "words": statistics.Words, "paragraphs": statistics.Paragraphs,
 			"symbols": statistics.SymbolsWOSpaces, "symbolsWithSpaces": statistics.SymbolsWhSpaces
 		});
 	};
@@ -2490,10 +2493,38 @@ window["eoStartEngine"] = function () {
 
 	engine["getImagesDirectory"] = function () { return native["GetImagesPath"](); };
 	engine["pdfCommands"] = function () {
-		// All pages laid out
-		for (var i = 0; i < 10000 && isLayoutPending(); ++i)
-			runTimers(100);
-		return pdfCommands(api);
+		// The document's pages, not the screen's
+		var view = mobileView;
+		if (view)
+			engine["setMobileView"](false);
+		try {
+			// All pages laid out
+			for (var i = 0; i < 10000 && isLayoutPending(); ++i)
+				runTimers(100);
+			return pdfCommands(api);
+		} finally {
+			if (view)
+				engine["setMobileView"](true, view.width, view.height, view.scale);
+		}
+	};
+
+	// Mobile view (documents): the text laid out again on pages of the screen's width (mm), its
+	// letters scaled by scale, without headers and footers, as ONLYOFFICE's mobile editors do it
+	// (sdkjs' read layout). Only the view changes: the document, saving, the changes sent to
+	// others are the same; PDFs (and printing) have the document's pages.
+	var mobileView = null;
+	engine["setMobileView"] = function (on, width, height, scale) {
+		if (isPresentation)
+			return;
+		if (on) {
+			mobileView = { width: width, height: height, scale: scale };
+			logicDocument.SetDocumentReadMode(width, height, scale);
+		} else if (mobileView) {
+			mobileView = null;
+			logicDocument.SetDocumentPrintMode();
+		}
+		state["layoutChanged"] = true;
+		allPagesChanged();
 	};
 
 	// Changes of pictures and shapes that don't change the layout (fill, outline, order) don't
