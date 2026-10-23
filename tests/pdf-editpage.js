@@ -93,4 +93,25 @@ t.run("formats its text", function () {
 	t.ok("in the fonts of the document", JSON.parse(eoEngine.getDocumentFonts()).indexOf("Liberation Sans") >= 0);
 });
 
+t.run("arranges and outlines pictures", function () {
+	// Laid out as when they are drawn
+	drawings().forEach(function (drawing) { drawing.Recalculate(); });
+	var picture = drawings().filter(function (drawing) {
+		var images = [];
+		if (drawing.getAllRasterImages)
+			drawing.getAllRasterImages(images);
+		return images.length > 0 && drawing.extX > 30;
+	})[0];
+	click(0, picture.x + picture.extX / 2, picture.y + picture.extY / 2);
+	var state = t.state();
+	t.ok("selected", state.pdf.drawing === true && state.drawings.length === 1);
+	eoEngine.arrange(0);
+	t.eq("in front", drawings().indexOf(picture), drawings().length - 1);
+	eoEngine.arrange(2);
+	t.eq("at the back", drawings().indexOf(picture), 0);
+	eoEngine.setShapeOutline("FF0000", 1);
+	t.noError("outline");
+	t.eq("outlined", JSON.parse(eoEngine.drawingColors()).outline, "FF0000");
+});
+
 t.done();

@@ -334,13 +334,20 @@ function imageFile(url) {
 		var isData = function (url) { return typeof url === "string" && url.indexOf("data:") === 0; };
 		if (!images.length || !images.every(isData))
 			return sendImgUrls.apply(this, arguments);
+		var names = images.map(imageFile);
 		// As sdkjs' native path gives them (ResetNewUrls takes the name from the path)
-		callback(images.map(function (url) {
-			var name = imageFile(url);
-			return { "url": name, "path": "media/" + name };
-		}));
+		function finish(uploaded) {
+			callback(uploaded.map(function (name) { return { "url": name, "path": "media/" + name }; }));
+		}
+		// While co-editing the others get them from the Document Server: the app uploads them
+		// first (imageUploads, finishImageUploads) while sdkjs waits, as the web editor's does
+		if (window["eoCoState"] && window["eoCoState"].socket)
+			pendingUploads.push({ names: names, finish: finish });
+		else
+			finish(names);
 	};
 })();
+var pendingUploads = [];
 
 // The web editor outlines their text boxes without fill as a hint while editing: here they
 // are drawn as in the file (the app frames the selected one)
@@ -850,7 +857,9 @@ function pdfEngine(api) {
 			// A text box or its text: the text's formatting applies (formatState)
 			"textBox": !!textDrawing(),
 			// The current page's text can be made editable (editPage)
-			"canEditPage": engine["canEditPage"](viewer.currentPage)
+			"canEditPage": engine["canEditPage"](viewer.currentPage),
+			// Pictures, shapes or text boxes are selected (not annotations): shapeCommands apply
+			"drawing": selectedShapes().length > 0
 		};
 	}
 
@@ -1351,6 +1360,51 @@ function pdfEngine(api) {
 			});
 		});
 		return JSON.stringify(documentFonts(Object.keys(fonts).map(installedFont)));
+	};
+
+	// ---------------------------------------------------------------------------------
+	// Pictures, shapes and text boxes (of edited pages, pasted, signatures): fill, outline and
+	// order, as in the other editors
+
+	function selectedShapes() {
+		return selectedDrawings().filter(function (item) { return item.drawing.IsDrawing && item.drawing.IsDrawing(); });
+	}
+	function shapeCommand(command) {
+		return function () {
+			finishComposing();
+			var pages = selectedShapes().map(function (item) { return item.page; });
+			command.apply(null, arguments);
+			pages.forEach(function (page) { state["dirtyPages"][page] = true; });
+		};
+	}
+	engine["drawingColors"] = function () { return drawingColorsJson(selectedShapes()); };
+	// A color as "RRGGBB", "" for none
+	engine["setShapeFill"] = shapeCommand(function (hex) { api.ShapeApply(shapeFill(hex)); });
+	engine["setShapeOutline"] = shapeCommand(function (hex, width) { api.ShapeApply(shapeOutline(hex, width)); });
+	// 0 to front, 1 forward, 2 to back, 3 backward
+	engine["arrange"] = shapeCommand(function (level) {
+		[api.shapes_bringToFront, api.shapes_bringForward, api.shapes_bringToBack, api.shapes_bringBackward][level].call(api);
+	});
+	// The PDF editor doesn't group (canGroup)
+	engine["group"] = function () {};
+
+	// Pictures to upload before sdkjs goes on (see sendImgUrls): their names in the images
+	// directory; then the names the server gave them, in the same order
+	engine["imageUploads"] = function () {
+		return JSON.stringify(pendingUploads.length ? pendingUploads[0].names : []);
+	};
+	engine["finishImageUploads"] = function (json) {
+		var upload = pendingUploads.shift();
+		if (!upload)
+			return;
+		// Editing a page ends then, and repaints the page's thumbnail (see editPage)
+		viewer.thumbnails = { _repaintPage: function () {} };
+		try {
+			upload.finish(JSON.parse(json));
+		} finally {
+			viewer.thumbnails = null;
+		}
+		allPagesChanged();
 	};
 
 	engine["takeImage"] = function () {
