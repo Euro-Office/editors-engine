@@ -3317,6 +3317,8 @@ function spreadsheetEngine(window, api) {
 	engine["addComment"] = edit(function (text) {
 		var ws = view();
 		var data = newCommentData(Asc.asc_CCommentData, commentUser, text);
+		// A cell's comment, not the workbook's (only those are placed and saved)
+		data.asc_putDocumentFlag(false);
 		var cell = ws.model.selectionRange.activeCell;
 		data.asc_putCol(cell.col);
 		data.asc_putRow(cell.row);
