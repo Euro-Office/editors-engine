@@ -255,8 +255,25 @@ function NativeCanvas(graphics, mmPerPixel) {
 	canvas.createImageData = function (w, h) { return { width: w, height: h, data: new Uint8ClampedArray(4 * w * h) }; };
 	canvas.getImageData = canvas.createImageData;
 	canvas.putImageData = function () {};
-	canvas.isPointInPath = function () { return false; };
+	recordHitPaths(canvas);
 })(NativeCanvas.prototype);
+
+// sdkjs tests taps on highlights and other markups with isPointInPath, on the viewer's overlay
+// (native.js' canvas, which draws nothing) and on ours: their paths are also recorded for hit
+// testing (engine.js' createHitContext), in the coordinates given
+function recordHitPaths(context) {
+	["beginPath", "moveTo", "lineTo", "quadraticCurveTo", "bezierCurveTo", "rect", "closePath"].forEach(function (name) {
+		var draw = context[name];
+		context[name] = function () {
+			if (!this.hitContext)
+				this.hitContext = createHitContext();
+			this.hitContext[name].apply(this.hitContext, arguments);
+			return draw.apply(this, arguments);
+		};
+	});
+	context.isPointInPath = function (x, y) { return !!this.hitContext && this.hitContext.isPointInPath(x, y); };
+}
+recordHitPaths(native_context2d.prototype);
 
 // ---------------------------------------------------------------------------------
 
@@ -1039,7 +1056,15 @@ function pdfEngine(api) {
 	engine["resolveComment"] = function (id, solved) {
 		changeComment(id, function (data) { data.asc_putSolved(solved); });
 	};
-	engine["deleteComment"] = function (id) { api.asc_removeComment(id); };
+	// A comment on text is a highlight with it (see addComment): deleting it deletes the
+	// highlight (sdkjs would keep the highlight without the comment)
+	engine["deleteComment"] = function (id) {
+		var annot = commentAnnot(id);
+		if (annot && annot.IsTextMarkup && annot.IsTextMarkup())
+			api.asc_removeAnnots([id]);
+		else
+			api.asc_removeComment(id);
+	};
 	engine["gotoComment"] = function (id) {
 		var annot = commentAnnot(id);
 		if (annot) {

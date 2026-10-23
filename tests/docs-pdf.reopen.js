@@ -25,6 +25,19 @@ t.run("comments selected text on a highlight", function () {
 	t.eq("the comment on it", comment && comment.id, String(highlight.GetId()));
 	t.eq("shown once it is selected", t.state().shownComments.join(), String(highlight.GetId()));
 	t.eq("reported once", t.state().shownComments.length, 0);
+	// A tap elsewhere, then on the highlighted text: its comment is shown
+	eoEngine.mouse(0, 0, 150, 250, 1, false, false);
+	eoEngine.mouse(2, 0, 150, 250, 1, false, false);
+	t.state();
+	var quad = highlight.GetQuads()[0];
+	var x = (quad[0] + quad[2]) / 2 * 25.4 / 72, y = (quad[1] + quad[5]) / 2 * 25.4 / 72;
+	eoEngine.mouse(0, 0, x, y, 1, false, false);
+	eoEngine.mouse(2, 0, x, y, 1, false, false);
+	t.eq("shown by a tap on the text", t.state().shownComments.join(), String(highlight.GetId()));
+	// Deleting the comment deletes its highlight
+	eoEngine.deleteComment(String(highlight.GetId()));
+	t.eq("the highlight deleted", annotations(), count);
+	t.ok("the comment deleted", !JSON.parse(eoEngine.getComments()).some(function (comment) { return comment.text === "On the text"; }));
 });
 t.run("adds a note", function () {
 	eoEngine.setCommentUser("tester", "Tester");
