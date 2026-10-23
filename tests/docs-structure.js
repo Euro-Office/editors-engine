@@ -60,6 +60,11 @@ t.run("notes", function () {
 		t.ok("after the reference (" + kind[0] + ")", /Noted \^X$/.test(text));
 	});
 });
+t.run("document fonts", function () {
+	var used = JSON.parse(eoEngine.getDocumentFonts());
+	t.ok("listed: " + used.join(), used.length > 0 && used.indexOf("Arial") >= 0);
+	t.ok("without the theme's placeholders", used.every(function (name) { return name.charAt(0) !== "+"; }));
+});
 t.noError("structure");
 t.run("delete a chart", function () {
 	// A tap selects the part of the chart under it too (here its legend): Delete removes the chart

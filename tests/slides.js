@@ -146,5 +146,10 @@ t.run("presentation settings", function () {
 	size = JSON.parse(eoEngine.getSlideSize());
 	t.ok("16:9", Math.abs(size["width"] / size["height"] - 16 / 9) < 0.01);
 });
+t.run("document fonts", function () {
+	var used = JSON.parse(eoEngine.getDocumentFonts());
+	t.ok("listed: " + used.join(), used.length > 0 && used.indexOf("Arial") >= 0);
+	t.ok("without the theme's placeholders", used.every(function (name) { return name.charAt(0) !== "+"; }));
+});
 t.noError("slides");
 t.done();

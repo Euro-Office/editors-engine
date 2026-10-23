@@ -80,5 +80,10 @@ t.run("spreadsheet settings", function () {
 	var setup = JSON.parse(eoEngine.getSheetSetup());
 	t.ok("A5", Math.round(Math.min(setup["width"], setup["height"])) === 148);
 });
+t.run("document fonts", function () {
+	var used = JSON.parse(eoEngine.getDocumentFonts());
+	t.ok("listed: " + used.join(), used.length > 0 && used.indexOf("Arial") >= 0);
+	t.ok("without the theme's placeholders", used.every(function (name) { return name.charAt(0) !== "+"; }));
+});
 t.noError("cells");
 t.done();

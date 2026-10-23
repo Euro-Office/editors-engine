@@ -807,6 +807,14 @@ function themeFontName(theme, name) {
 	return name && scheme && scheme.checkFont ? scheme.checkFont(name) : name || "";
 }
 
+// A document's font names, sorted, without the theme's placeholders (+mn-lt, ...); the engine
+// may draw some with others, as the web editor does
+function documentFonts(names) {
+	var found = names.filter(function (name) { return name && name.charAt(0) !== "+"; });
+	found.sort(function (a, b) { return a.localeCompare(b); });
+	return found;
+}
+
 // Color schemes ("Office", "Grayscale", ...: the theme's colors), as web-apps lists them: the
 // built-in ones and the document's. Choosing one recolors what uses the theme's colors.
 function colorSchemeCommands(engine, api, changed) {
@@ -1972,6 +1980,11 @@ window["eoStartEngine"] = function () {
 		var names = (AscFonts.g_font_infos || []).map(function (info) { return info.Name; });
 		names.sort(function (a, b) { return a.localeCompare(b); });
 		return JSON.stringify(names);
+	};
+	// Fonts the document uses (its text, styles and theme)
+	engine["getDocumentFonts"] = function () {
+		var used = typeof logicDocument.Document_Get_AllFontNames === "function" ? logicDocument.Document_Get_AllFontNames() : {};
+		return JSON.stringify(documentFonts(Object.keys(used)));
 	};
 
 	// Search: find selects the next or previous match (from the cursor); the state has the
@@ -3840,6 +3853,10 @@ function spreadsheetEngine(window, api) {
 		var names = (AscFonts.g_font_infos || []).map(function (info) { return info.Name; });
 		names.sort(function (a, b) { return a.localeCompare(b); });
 		return JSON.stringify(names);
+	};
+	// Fonts the cells use
+	engine["getDocumentFonts"] = function () {
+		return JSON.stringify(documentFonts(api.wbModel.generateFontMap()));
 	};
 	engine["getStyles"] = function () { return "[]"; };
 
