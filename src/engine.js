@@ -1393,6 +1393,10 @@ window["eoStartEngine"] = function () {
 		api.WordControl.GetSlidesCount = function () { return logicDocument.GetSlidesCount(); };
 		api.WordControl.onNextPage = function () { api.WordControl.GoToPage(logicDocument.CurPage + 1); };
 		api.WordControl.onPrevPage = function () { api.WordControl.GoToPage(logicDocument.CurPage - 1); };
+		// The app scrolls to the cursor itself. The web editor's view scrolls there and moves its
+		// cursor element after each paint; without scroll bars that threw, and as the paint never
+		// ended, then every update of the cursor, applying others' changes too
+		Object.defineProperty(drawingDocument, "UpdateTargetFromPaint", { get: function () { return false; }, set: function () {} });
 	}
 	// Page for selections sdkjs draws relative to a shape (presentations)
 	var selectionPage = null;
@@ -2169,7 +2173,19 @@ window["eoStartEngine"] = function () {
 	engine["addEndnote"] = function () { api.asc_AddEndnote(); };
 	// From a note back to its reference in the text
 	engine["endNoteEditing"] = function () {
-		logicDocument.EndFootnotesEditing();
+		var endnote = api.asc_IsCursorInEndnote();
+		var note = endnote ? logicDocument.Endnotes.GetCurEndnote() : logicDocument.Footnotes.GetCurFootnote();
+		var ref = note && note.GetRef();
+		if (endnote)
+			logicDocument.EndEndnotesEditing();
+		else
+			logicDocument.EndFootnotesEditing();
+		// sdkjs leaves the cursor at the document's start
+		var run = ref && ref.GetRun();
+		if (run && run.IsUseInDocument()) {
+			run.State.ContentPos = run.Content.indexOf(ref) + 1;
+			run.Make_ThisElementCurrent(true);
+		}
 		allPagesChanged();
 	};
 
