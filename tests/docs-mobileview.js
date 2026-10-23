@@ -32,5 +32,18 @@ t.run("mobile view", function () {
 	t.ok("off", !t.state()["mobileView"]);
 	t.ok("A4 again", Math.abs(eoEngine.getPageWidth(0) - 210) < 1);
 });
+t.run("keeps the place", function () {
+	// The text at the end stays in view: where the cursor is there
+	eoEngine.keyDown(35, false, true);
+	var before = t.state()["cursor"];
+	eoEngine.setMobileView(true, 70, 130, 1, before["page"], before["x1"], before["y1"] + 1);
+	var state = t.state();
+	var after = state["cursor"];
+	t.ok("navigate to it: " + JSON.stringify(state["navigate"]) + " cursor " + JSON.stringify(after),
+		state["navigate"] && state["navigate"]["page"] === after["page"] && Math.abs(state["navigate"]["y"] - after["y1"]) < 10);
+	t.ok("reported once", t.state()["navigate"] === null);
+	t.ok("on a later page than before", after["page"] > before["page"]);
+	eoEngine.setMobileView(false);
+});
 t.noError("mobile view");
 t.done();

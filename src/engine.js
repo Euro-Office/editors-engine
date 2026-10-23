@@ -1526,6 +1526,7 @@ window["eoStartEngine"] = function () {
 		"layoutPending": false, // pages still to lay out: call tick()
 		"currentPage": -1,     // presentations: the current slide
 		"mobileView": false,   // documents: laid out for the screen (setMobileView)
+		"navigate": null,      // {page, y}: a place to show (setMobileView keeps one in view), reported once
 		"modified": false,     // changed since opening or the last save
 		"error": null,         // exception of the last command (see reportError), reported once
 		"interface": {}       // asc_on* values: bold, italic, canUndo, ...
@@ -1689,6 +1690,7 @@ window["eoStartEngine"] = function () {
 		state["error"] = null;
 		state["openUrl"] = null;
 		state["shownComments"] = [];
+		state["navigate"] = null;
 		return result;
 	};
 
@@ -2512,10 +2514,12 @@ window["eoStartEngine"] = function () {
 	// letters scaled by scale, without headers and footers, as ONLYOFFICE's mobile editors do it
 	// (sdkjs' read layout). Only the view changes: the document, saving, the changes sent to
 	// others are the same; PDFs (and printing) have the document's pages.
+	// The text at (page, x, y) before, if given, is where it is afterwards: state's navigate.
 	var mobileView = null;
-	engine["setMobileView"] = function (on, width, height, scale) {
+	engine["setMobileView"] = function (on, width, height, scale, page, x, y) {
 		if (isPresentation)
 			return;
+		var place = page === undefined || page < 0 ? null : logicDocument.Get_NearestPos(page, x, y, true);
 		if (on) {
 			mobileView = { width: width, height: height, scale: scale };
 			logicDocument.SetDocumentReadMode(width, height, scale);
@@ -2525,6 +2529,14 @@ window["eoStartEngine"] = function () {
 		}
 		state["layoutChanged"] = true;
 		allPagesChanged();
+		if (place && place.Paragraph && place.ContentPos) {
+			// Laid out that far (the whole document, unless it takes long)
+			for (var end = Date.now() + 2000; isLayoutPending() && Date.now() < end;)
+				runTimers(100);
+			var moved = place.Paragraph.Get_XYByContentPos(place.ContentPos);
+			if (moved && typeof moved.PageNum === "number")
+				state["navigate"] = { "page": moved.PageNum, "y": moved.Y };
+		}
 	};
 
 	// Changes of pictures and shapes that don't change the layout (fill, outline, order) don't
