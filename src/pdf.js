@@ -316,12 +316,13 @@ function reopenPdf(api, path) {
 	var counter = AscCommon.g_oIdCounter;
 	var userId = counter.m_sUserId;
 	var user = api.User;
+	// The table of objects keeps its id (changes that add objects are addressed to it). Not with
+	// Clear, which adds the table again with a change that can't be recorded (it throws while
+	// the history is on, and the open after it doesn't happen)
 	var table = AscCommon.g_oTableId;
-	var tableId = table.Id;
-	table.Clear();
-	delete table.m_aPairs[tableId];
-	table.Id = tableId;
-	table.m_aPairs[tableId] = table;
+	table.m_aPairs = {};
+	table.m_bTurnOff = false;
+	table.m_aPairs[table.Id] = table;
 	counter.Clear();
 	counter.m_nIdCounterLoad = window["eoPdfIdStart"];
 
