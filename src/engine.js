@@ -3674,7 +3674,7 @@ function spreadsheetEngine(window, api) {
 		else
 			api.asc_decreaseCellDigitNumbers();
 	});
-	// Borders of the selection: "all", "outer", "bottom" or "none"
+	// Borders of the selected cells: all, outer, inner, left, top, right, bottom or none
 	engine["setBorders"] = edit(function (kind) {
 		var o = Asc.c_oAscBorderOptions;
 		var line = new Asc.asc_CBorder(Asc.c_oAscBorderStyles.Thin, rgbColor("000000"));
@@ -3682,11 +3682,13 @@ function spreadsheetEngine(window, api) {
 		if (kind === "all" || kind === "outer") {
 			borders[o.Top] = borders[o.Right] = borders[o.Bottom] = borders[o.Left] = line;
 		}
-		if (kind === "all") {
+		if (kind === "all" || kind === "inner") {
 			borders[o.InnerV] = borders[o.InnerH] = line;
 		}
-		if (kind === "bottom") {
-			borders[o.Bottom] = line;
+		// One side
+		var sides = { "left": o.Left, "top": o.Top, "right": o.Right, "bottom": o.Bottom };
+		if (sides[kind] !== undefined) {
+			borders[sides[kind]] = line;
 		}
 		api.asc_setCellBorders(borders);
 	});

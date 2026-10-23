@@ -54,5 +54,15 @@ t.run("inserts a picture at its size", function () {
 	var picture = drawings[drawings.length - 1].graphicObject;
 	t.ok("its size", Math.abs(picture.extX - 400 * 25.4 / 96) < 1 && Math.abs(picture.extY - 200 * 25.4 / 96) < 1);
 });
+t.run("borders of one side", function () {
+	eoEngine.selectCells(4, 6, 4, 6);
+	eoEngine.setBorders("left");
+	var ws = Asc.editor.wb.getWorksheet().model;
+	var border = ws.getCell3(6, 4).getBorderFull();
+	t.ok("left", border.l.s !== Asc.c_oAscBorderStyles.None);
+	t.ok("not right", border.r.s === Asc.c_oAscBorderStyles.None);
+	eoEngine.setBorders("none");
+	t.ok("none", ws.getCell3(6, 4).getBorderFull().l.s === Asc.c_oAscBorderStyles.None);
+});
 t.noError("cells");
 t.done();
