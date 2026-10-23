@@ -276,6 +276,77 @@ function recordHitPaths(context) {
 recordHitPaths(native_context2d.prototype);
 
 // ---------------------------------------------------------------------------------
+// Pages made editable (CPDFDoc.EditPage): core's reader scans a page into text boxes, shapes
+// and pictures, which sdkjs draws from then on
+
+// Their text keeps the file's embedded fonts by name ("Embedded: <name>"), which the web editor
+// loads from the file. The engine's graphics find fonts by name among the installed ones only,
+// and text is drawn by glyph: measured with one font and drawn with another it would be
+// garbled. Pages edited here get the installed font sdkjs took as the same (embeddedFontsMap,
+// see editPage); those edited in the web editor (co-editing) are measured and drawn with it.
+function installedFont(name) {
+	var map = window["Asc"]["editor"] && window["Asc"]["editor"].embeddedFontsMap;
+	return typeof name === "string" && map && map[name] && name.indexOf(AscFonts.getEmbeddedFontPrefix()) === 0 ? map[name] : name;
+}
+(function () {
+	// The viewer uses these once the file is open (afterOpen)
+	var fonts = AscFonts.g_fontApplication;
+	["LoadFontWithEmbed", "GetFontInfoWithEmbed"].forEach(function (method) {
+		var original = fonts[method];
+		fonts[method] = function (name) {
+			var args = Array.prototype.slice.call(arguments);
+			args[0] = installedFont(name);
+			return original.apply(this, args);
+		};
+	});
+	var graphics = AscCommon.CNativeGraphics.prototype;
+	var setFontInternal = graphics.SetFontInternal;
+	graphics.SetFontInternal = function (name, size, style) {
+		return setFontInternal.call(this, installedFont(name), size, style);
+	};
+	var setFont = graphics.SetFont;
+	graphics.SetFont = function (font) {
+		var name = font && font.FontFamily && font.FontFamily.Name;
+		if (installedFont(name) !== name)
+			font = { FontFamily: { Name: installedFont(name), Index: -1 }, FontSize: font.FontSize, Bold: font.Bold, Italic: font.Italic };
+		return setFont.call(this, font);
+	};
+})();
+
+// Their pictures come as data URLs, which the web editor gives the server to store with the
+// document (sendImgUrls). Here they become files of the images directory, as the app's
+// pictures are: the engine writes them after the command (eoEngine.takeImage, see
+// Document::Execute) under the names given now, each one a file of its own: core's PDF writer
+// draws a picture used twice once. (Core's graphics draw data URLs through one file, so all
+// pictures would show the first one.)
+var pendingImages = [];
+var imageCount = 0;
+function imageFile(url) {
+	var type = /^data:image\/(png|jpeg|gif|bmp)/.exec(url);
+	var name = "scan-" + Date.now().toString(36) + "-" + (++imageCount) + "." + (type ? type[1].replace("jpeg", "jpg") : "png");
+	pendingImages.push({ name: name, data: url.substring(url.indexOf(",") + 1) });
+	window["eoPdfImages"] = true;
+	return name;
+}
+(function () {
+	var sendImgUrls = AscCommon.sendImgUrls;
+	AscCommon.sendImgUrls = function (api, images, callback) {
+		var isData = function (url) { return typeof url === "string" && url.indexOf("data:") === 0; };
+		if (!images.length || !images.every(isData))
+			return sendImgUrls.apply(this, arguments);
+		// As sdkjs' native path gives them (ResetNewUrls takes the name from the path)
+		callback(images.map(function (url) {
+			var name = imageFile(url);
+			return { "url": name, "path": "media/" + name };
+		}));
+	};
+})();
+
+// The web editor outlines their text boxes without fill as a hint while editing: here they
+// are drawn as in the file (the app frames the selected one)
+AscPDF.CPdfShape.prototype.ShouldDrawImaginaryBorder = function () { return false; };
+
+// ---------------------------------------------------------------------------------
 
 window["eoOpenPdf"] = function () {
 	var file = window["eoPdfFile"];
@@ -641,10 +712,11 @@ function pdfEngine(api) {
 		selectionPage = object.GetPage();
 		var textMatrix = drawingDocument.TextMatrix;
 		try {
+			// Text boxes: in their text's transform, as the other editors' controllers draw it
+			// (drawTextSelection, which the PDF editor's hasn't)
 			if (object.IsDrawing && object.IsDrawing())
-				doc.GetController().drawTextSelection(selectionPage);
-			else
-				content.DrawSelectionOnPage(0);
+				drawingDocument.UpdateTargetTransform(object.transformText || null);
+			content.DrawSelectionOnPage(0);
 		} catch (e) {
 			console.log("pdf: selection " + e);
 		}
@@ -683,7 +755,8 @@ function pdfEngine(api) {
 		return frames;
 	}
 
-	["asc_onCanUndo", "asc_onCanRedo", "asc_onDocumentModifiedChanged"].forEach(function (name) {
+	["asc_onBold", "asc_onItalic", "asc_onUnderline", "asc_onPrAlign", "asc_onCanUndo", "asc_onCanRedo",
+		"asc_onDocumentModifiedChanged"].forEach(function (name) {
 		api.asc_registerCallback(name, function (value) {
 			state["interface"][name.substring("asc_on".length)] = value;
 		});
@@ -746,6 +819,11 @@ function pdfEngine(api) {
 		state["shownComments"] = commented && commented !== shownAnnot ? [commented] : [];
 		shownAnnot = commented;
 		state["coEditing"] = engine["coEditingState"] ? engine["coEditingState"]() : null;
+		try {
+			state["format"] = formatState();
+		} catch (e) {
+			state["format"] = {};
+		}
 		var result = JSON.stringify(state);
 		state["dirtyPages"] = {};
 		state["layoutChanged"] = false;
@@ -761,7 +839,9 @@ function pdfEngine(api) {
 		return {
 			"ink": api.isInkDrawerOn(),
 			"annotation": annot ? { "id": annot.GetId(), "type": annot.GetType(), "comment": !!annot.GetContents() } : null,
-			"textSelected": viewer.file.isSelectionUse() && !doc.activeDrawing
+			"textSelected": viewer.file.isSelectionUse() && !doc.activeDrawing,
+			// A text box or its text: the text's formatting applies (formatState)
+			"textBox": !!textDrawing()
 		};
 	}
 
@@ -1095,6 +1175,179 @@ function pdfEngine(api) {
 			api.ImageLoader.map_image_index[name].Image = { "width": widthPx, "height": heightPx };
 		}
 		state["dirtyPages"][page] = true;
+	};
+
+	// ---------------------------------------------------------------------------------
+	// Editing a page's content (the web PDF editor's "Edit page"): its text, shapes and
+	// pictures become text boxes, shapes and pictures as those added, in one undo step. Pages
+	// added in the editor and pages already edited can't be (sdkjs draws their content).
+
+	engine["canEditPage"] = function (page) {
+		var file = viewer.file.pages[page], info = viewer.pagesInfo.pages[page];
+		return !!file && !!info && file.originIndex !== undefined && !file.isRecognized && !info.IsEditPageLock();
+	};
+	engine["editPage"] = function (page) {
+		finishComposing();
+		if (!engine["canEditPage"](page))
+			return;
+		viewer.currentPage = page;
+		var before = (doc.GetPageInfo(page).drawings || []).slice();
+		// EditPage adds the objects while sdkjs loads their fonts (pre_Paste, at once here), then
+		// ends its action: they get the installed fonts first, in the same undo step
+		var loaded = null;
+		api.pre_Paste = function (fonts, images, callback) { loaded = callback; };
+		// It repaints the page's thumbnail, which the engine has none of
+		viewer.thumbnails = { _repaintPage: function () {} };
+		try {
+			api.asc_EditPage();
+			(doc.GetPageInfo(page).drawings || []).forEach(function (drawing) {
+				if (before.indexOf(drawing) < 0)
+					useInstalledFonts(drawing);
+			});
+			if (loaded)
+				loaded();
+		} finally {
+			delete api.pre_Paste;
+			viewer.thumbnails = null;
+		}
+		state["dirtyPages"][page] = true;
+	};
+	// The text of a scanned object in the installed fonts sdkjs took as the same as the file's
+	// (see installedFont): typing would use the file's fonts (CPdfDrawingPrototype.EnterText),
+	// which sdkjs reads from the file in a browser
+	function useInstalledFonts(drawing) {
+		var contents = [];
+		(function collect(object) {
+			if (object.spTree)
+				object.spTree.forEach(collect);
+			else if (object.txBody && object.txBody.content)
+				contents.push(object.txBody.content);
+			else if (object.graphicObject && object.graphicObject.Content)
+				object.graphicObject.Content.forEach(function (row) {
+					row.Content.forEach(function (cell) { contents.push(cell.Content); });
+				});
+		})(drawing);
+		contents.forEach(function (content) {
+			content.CheckRunContent(function (run) {
+				var fonts = run.Pr && run.Pr.RFonts;
+				if (!fonts)
+					return false;
+				var changed = fonts.Copy(), replaced = false;
+				["Ascii", "EastAsia", "HAnsi", "CS"].forEach(function (slot) {
+					var font = changed[slot];
+					if (font && installedFont(font.Name) !== font.Name) {
+						changed[slot] = { Name: installedFont(font.Name), Index: -1 };
+						replaced = true;
+					}
+				});
+				if (replaced)
+					run.Set_RFonts(changed);
+				return false;
+			});
+		});
+	}
+	// ---------------------------------------------------------------------------------
+	// Formatting the text of text boxes (of edited pages and pasted ones), as in presentations:
+	// of the selected one, or at the cursor in it
+
+	function textDrawing() {
+		var drawing = doc.activeDrawing;
+		return drawing && drawing.GetDocContent && drawing.GetDocContent() ? drawing : null;
+	}
+	function hexOf(color) {
+		if (!color || color.Auto || color.r === undefined && color.R === undefined)
+			return "";
+		var r = color.r !== undefined ? color.r : color.R, g = color.g !== undefined ? color.g : color.G, b = color.b !== undefined ? color.b : color.B;
+		return [r, g, b].map(function (v) { return ("0" + v.toString(16)).slice(-2); }).join("").toUpperCase();
+	}
+	// As engine.js' formatState; the toolbar's state too, which sdkjs reports only for text
+	// being edited
+	function formatState() {
+		var controller = doc.GetController();
+		if (!textDrawing() || !controller)
+			return {};
+		var textPr = controller.getParagraphTextPr(), paraPr = controller.getParagraphParaPr();
+		var result = {};
+		if (textPr) {
+			state["interface"]["Bold"] = !!textPr.Bold;
+			state["interface"]["Italic"] = !!textPr.Italic;
+			state["interface"]["Underline"] = !!textPr.Underline;
+			result["FontName"] = themeFontName(doc.GetTheme(), textPr.FontFamily ? textPr.FontFamily.Name : "");
+			result["FontSize"] = textPr.FontSize || 0;
+			result["Strikeout"] = !!textPr.Strikeout;
+			result["VertAlign"] = textPr.VertAlign || 0;
+			var fill = textPr.Unifill && textPr.Unifill.fill;
+			result["Color"] = hexOf(fill && fill.color && fill.color.RGBA ? fill.color.RGBA : textPr.Color);
+			result["Highlight"] = "";
+		}
+		if (paraPr) {
+			state["interface"]["PrAlign"] = paraPr.Jc;
+			if (paraPr.Spacing) {
+				result["LineRule"] = paraPr.Spacing.LineRule;
+				result["Line"] = paraPr.Spacing.Line;
+				result["SpacingBefore"] = paraPr.Spacing.Before;
+				result["SpacingAfter"] = paraPr.Spacing.After;
+			}
+			result["List"] = paraPr.Bullet && paraPr.Bullet.getBulletType ? paraPr.Bullet.getBulletType() : -1;
+		}
+		return result;
+	}
+
+	engine["setBold"] = function (value) { api.put_TextPrBold(value); };
+	engine["setItalic"] = function (value) { api.put_TextPrItalic(value); };
+	engine["setUnderline"] = function (value) { api.put_TextPrUnderline(value); };
+	engine["setAlign"] = function (value) { api.put_PrAlign(value); };
+	engine["setFontName"] = function (name) { api.put_TextPrFontName(name); };
+	engine["setFontSize"] = function (size) { api.put_TextPrFontSize(size); };
+	engine["setStrikeout"] = function (value) { api.put_TextPrStrikeout(value); };
+	engine["setBaseline"] = function (value) { api.put_TextPrBaseline(value); };
+	engine["setTextColor"] = function (hex) {
+		if (hex) {
+			api.put_TextColor(rgbColor(hex));
+		} else {
+			var auto = new Asc.asc_CColor();
+			auto.Auto = true;
+			api.put_TextColor(auto);
+		}
+	};
+	// The PDF editor's markers are markups (see markup)
+	engine["setHighlight"] = function () {};
+	engine["clearFormatting"] = function () { api.ClearFormating(); };
+	engine["setList"] = function (type, subtype) { api.put_ListType(type, subtype); };
+	engine["indent"] = function (increase) {
+		if (increase)
+			api.IncreaseIndent();
+		else
+			api.DecreaseIndent();
+	};
+	engine["setLineSpacing"] = function (rule, value) { api.put_PrLineSpacing(rule, value); };
+	engine["setParagraphSpacing"] = function (before, after) {
+		api.put_LineSpacingBeforeAfter(0, before);
+		api.put_LineSpacingBeforeAfter(1, after);
+	};
+	engine["getStyles"] = function () { return "[]"; };
+	engine["setStyle"] = function () {};
+	engine["getFonts"] = function () {
+		var names = (AscFonts.g_font_infos || []).map(function (info) { return info.Name; });
+		names.sort(function (a, b) { return a.localeCompare(b); });
+		return JSON.stringify(names);
+	};
+	// The fonts of the text boxes
+	engine["getDocumentFonts"] = function () {
+		var fonts = {};
+		viewer.pagesInfo.pages.forEach(function (info) {
+			(info.drawings || []).forEach(function (drawing) {
+				if (drawing.getAllFonts)
+					drawing.getAllFonts(fonts);
+			});
+		});
+		return JSON.stringify(documentFonts(Object.keys(fonts).map(installedFont)));
+	};
+
+	engine["takeImage"] = function () {
+		var image = pendingImages.shift();
+		window["eoPdfImages"] = pendingImages.length > 0;
+		return image ? image.name + "\n" + image.data : "";
 	};
 
 	// ---------------------------------------------------------------------------------

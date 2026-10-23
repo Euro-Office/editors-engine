@@ -4,8 +4,8 @@
 #
 #   editors-engine/tests/run.sh <eo-render> <runtime dir> [test.js ...]
 #
-# A test names its document (relative to the MobileEditors root) in a "// document:" line. With a
-# "// save:" line the document is saved after the test and opened again for <test>.reopen.js.
+# A test names its document (relative to the MobileEditors root, or $OUT_DIR/<file> for a file an
+# earlier test saved) in a "// document:" line. With a "// save:" line the document is saved after the test and opened again for <test>.reopen.js.
 # Output files go to $OUT_DIR (build/work/engine-tests).
 set -u
 
@@ -44,7 +44,7 @@ check() {
 for test in "$@"; do
     name=$(basename "$test" .js)
     case "$name" in lib | *.reopen) continue ;; esac
-    document=$(sed -n 's#^// document: ##p' "$test")
+    document=$(sed -n 's#^// document: ##p' "$test" | sed "s#^\$OUT_DIR#$OUT_DIR#")
     save=$(sed -n 's#^// save: ##p' "$test")
     if [ -z "$document" ]; then
         echo "FAIL $name: no \"// document:\" line"

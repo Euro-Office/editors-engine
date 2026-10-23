@@ -7,6 +7,7 @@
 #include "Common/OfficeFileErrorDescription.h"
 #include "Common/OfficeFileFormatDefines.h"
 #include "Common/OfficeFileFormats.h"
+#include "DesktopEditor/common/Base64.h"
 #include "DesktopEditor/common/Directory.h"
 #include "DesktopEditor/common/File.h"
 #include "DesktopEditor/doctrenderer/docbuilder.h"
@@ -630,8 +631,46 @@ namespace eo
 		std::string text = done && result.IsString()
 			? std::wstring_convert<std::codecvt_utf8<wchar_t>>().to_bytes(result.ToString().c_str()) : std::string();
 		if (m_private->isPdf)
-			ReopenPdf();
+		{
+			// What pdf.js asks of the engine after a command
+			int requests = (int)m_private->RunNumber(L"(window.eoPdfReopen ? 1 : 0) + (window.eoPdfImages ? 2 : 0)");
+			if (requests & 2)
+				WritePdfImages();
+			if (requests & 1)
+				ReopenPdf();
+		}
 		return text;
+	}
+
+	// Pictures sdkjs got as data URLs (pdf.js' sendImgUrls: of pages made editable), written to
+	// the images directory under the names pdf.js gave them
+	void Document::WritePdfImages()
+	{
+		CDocBuilderValue imagesDir;
+		if (!m_private->Run(L"eoEngine.getImagesDirectory()", &imagesDir) || !imagesDir.IsString())
+			return;
+		std::wstring dir = imagesDir.ToString().c_str();
+		for (;;)
+		{
+			CDocBuilderValue image;
+			if (!m_private->Run(L"eoEngine.takeImage()", &image) || !image.IsString())
+				return;
+			// The name, then the picture in base64
+			std::wstring text = image.ToString().c_str();
+			size_t separator = text.find(L'\n');
+			if (separator == std::wstring::npos)
+				return;
+			std::string base64(text.begin() + separator + 1, text.end());
+			int length = NSBase64::Base64DecodeGetRequiredLength((int)base64.size());
+			std::vector<BYTE> data(length);
+			NSFile::CFileBinary file;
+			if (NSBase64::Base64Decode(base64.c_str(), (int)base64.size(), data.data(), &length) &&
+			    file.CreateFileW(dir + L"/" + text.substr(0, separator)))
+			{
+				file.WriteFile(data.data(), (DWORD)length);
+				file.CloseFile();
+			}
+		}
 	}
 
 	// Co-editing opens the server's file (pdf.js asks for it, eoPdfReopen): the engine's reader
