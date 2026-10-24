@@ -2372,6 +2372,10 @@ window["eoStartEngine"] = function () {
 				result["KeepNext"] = !!paraPr.KeepNext;
 				result["SuppressLineNumbers"] = !!paraPr.SuppressLineNumbers;
 				result["FirstLine"] = paraPr.Ind && paraPr.Ind.FirstLine ? paraPr.Ind.FirstLine : 0;
+				// The background color, "" for none
+				var shd = paraPr.Shd;
+				var shdColor = shd && !shd.IsNil() ? shd.GetSimpleColor(logicDocument.GetTheme(), logicDocument.Get_ColorMap ? logicDocument.Get_ColorMap() : null) : null;
+				result["Shading"] = shdColor && !shdColor.Auto ? hexOf(shdColor) : "";
 			}
 			var styles = logicDocument.Get_Styles();
 			var styleId = paraPr && paraPr.PStyle ? paraPr.PStyle : styles.Get_Default_Paragraph();
@@ -2851,6 +2855,60 @@ window["eoStartEngine"] = function () {
 
 	engine["addFootnote"] = function () { api.asc_AddFootnote(); };
 	engine["addEndnote"] = function () { api.asc_AddEndnote(); };
+
+	// Text documents: the paragraphs' background color (see ascColor), "" for none
+	engine["setParagraphShading"] = function (hex) {
+		if (hex)
+			api.put_ParagraphShade(true, ascColor(hex));
+		else
+			api.put_ParagraphShade(false);
+	};
+
+	// Footnotes' or endnotes' settings, as web-apps' note settings set them (for the whole
+	// document): {pos, format, start, restart} by these names (the values only text documents have)
+	function noteValues() {
+		return {
+			pos: { "pageBottom": Asc.c_oAscFootnotePos.PageBottom, "beneathText": Asc.c_oAscFootnotePos.BeneathText,
+				"sectEnd": Asc.c_oAscEndnotePos.SectEnd, "docEnd": Asc.c_oAscEndnotePos.DocEnd },
+			format: { "decimal": Asc.c_oAscNumberingFormat.Decimal, "lowerLetter": Asc.c_oAscNumberingFormat.LowerLetter,
+				"upperLetter": Asc.c_oAscNumberingFormat.UpperLetter, "lowerRoman": Asc.c_oAscNumberingFormat.LowerRoman,
+				"upperRoman": Asc.c_oAscNumberingFormat.UpperRoman },
+			restart: { "continuous": Asc.c_oAscFootnoteRestart.Continuous, "eachSect": Asc.c_oAscFootnoteRestart.EachSect,
+				"eachPage": Asc.c_oAscFootnoteRestart.EachPage }
+		};
+	}
+	// The name of a value; footnotes' and endnotes' positions share values: theirs only
+	function nameOf(names, value, positions) {
+		var keys = Object.keys(names).filter(function (key) { return !positions || positions.indexOf(key) >= 0; });
+		return keys.filter(function (key) { return names[key] === value; })[0] || keys[0];
+	}
+	engine["getNoteSettings"] = function (endnote) {
+		var values = noteValues();
+		var props = endnote ? api.asc_GetEndnoteProps() : api.asc_GetFootnoteProps();
+		return JSON.stringify({
+			"pos": nameOf(values.pos, props.get_Pos(), endnote ? ["sectEnd", "docEnd"] : ["pageBottom", "beneathText"]),
+			"format": nameOf(values.format, props.get_NumFormat()),
+			"start": props.get_NumStart(),
+			"restart": nameOf(values.restart, props.get_NumRestart())
+		});
+	};
+	engine["setNoteSettings"] = function (endnote, settings) {
+		var values = noteValues();
+		var props = new Asc.CAscFootnotePr();
+		props.put_Pos(values.pos[settings["pos"]]);
+		props.put_NumFormat(values.format[settings["format"]]);
+		props.put_NumStart(settings["start"]);
+		props.put_NumRestart(values.restart[settings["restart"]]);
+		if (endnote)
+			api.asc_SetEndnoteProps(props, true);
+		else
+			api.asc_SetFootnoteProps(props, true);
+	};
+	// All footnotes to endnotes ("toEndnotes"), endnotes to footnotes ("toFootnotes") or both ("swap")
+	engine["convertNotes"] = function (how) {
+		api.asc_ConvertFootnoteType(false, how !== "toFootnotes", how !== "toEndnotes");
+	};
+	engine["removeNotes"] = function (footnotes, endnotes) { api.asc_RemoveAllFootnotes(footnotes, endnotes); };
 	// From a note back to its reference in the text
 	engine["endNoteEditing"] = function () {
 		var endnote = api.asc_IsCursorInEndnote();
