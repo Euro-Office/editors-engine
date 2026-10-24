@@ -14,4 +14,12 @@ t.run("advanced paragraph settings", function () {
 	eoEngine.setParagraphOption("pageBreakBefore", false);
 	t.eq("off again", t.state().format.PageBreakBefore, false);
 });
+t.run("caps", function () {
+	eoEngine.keyDown(36, true, false); // Shift+Home: the line
+	eoEngine.setCaps(true);
+	t.eq("all caps", t.state().format.Caps, true);
+	eoEngine.setCaps(false);
+	eoEngine.setSmallCaps(true);
+	t.eq("small caps", [t.state().format.Caps, t.state().format.SmallCaps].join(), "false,true");
+});
 t.done();

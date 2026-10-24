@@ -393,13 +393,33 @@ function uniFillHex(fill) {
 // The fill and outline of the first of the selected drawings ([{drawing}]), as JSON
 // {fill, outline} (see uniFillHex), and the direction of its text (vert, see shapeTextVert;
 // null without text); "null" without one
-// Fills and outlines of selected charts go to the whole chart: sdkjs gives them to the part of
-// it selected inside it (the plot area, a series, ... after another tap), or else the chart
-function wholeCharts(selected) {
+// What fills, outlines and opacity of charts go to (setChartPart): "chart" (the whole chart) or
+// "plotArea". sdkjs gives them to the part selected inside the chart (the plot area, a series,
+// ... after another tap), or else the whole chart: chartParts selects the chosen one.
+var chartPart = "chart";
+function isChart(drawing) {
+	return drawing.getObjectType() === AscDFH.historyitem_type_ChartSpace;
+}
+function chartParts(selected) {
 	selected.forEach(function (item) {
-		if (item.drawing.getObjectType() === AscDFH.historyitem_type_ChartSpace)
-			item.drawing.resetSelection(false);
+		if (!isChart(item.drawing))
+			return;
+		item.drawing.resetSelection(false);
+		if (chartPart === "plotArea" && item.drawing.chart && item.drawing.chart.plotArea)
+			item.drawing.selection.plotArea = item.drawing.chart.plotArea;
 	});
+}
+// The drawing's part that has the fill and outline (see chartPart)
+function filledPart(drawing) {
+	return isChart(drawing) && chartPart === "plotArea" && drawing.chart && drawing.chart.plotArea ? drawing.chart.plotArea : drawing;
+}
+function fillOf(drawing) {
+	var part = filledPart(drawing);
+	return part.brush || (part.spPr && part.spPr.Fill);
+}
+function lineOf(drawing) {
+	var part = filledPart(drawing);
+	return part.pen || (part.spPr && part.spPr.ln);
 }
 
 function opacityOf(fill) {
@@ -407,7 +427,7 @@ function opacityOf(fill) {
 }
 
 function shadowOf(drawing) {
-	if (drawing.getObjectType() === AscDFH.historyitem_type_ChartSpace || !drawing.getOuterShdwAsc)
+	if (isChart(drawing) || !drawing.getOuterShdwAsc)
 		return null;
 	var shadow = drawing.getOuterShdwAsc();
 	return shadow ? (shadow.getPreset() || "custom") : "";
@@ -417,17 +437,18 @@ function drawingColorsJson(selected) {
 	var drawing = selected.length ? selected[0].drawing : null;
 	if (!drawing)
 		return "null";
-	var line = drawing.pen || (drawing.spPr && drawing.spPr.ln);
+	var line = lineOf(drawing);
 	var bodyPr = drawing.getObjectType() === AscDFH.historyitem_type_Shape && drawing.getBodyPr ? drawing.getBodyPr() : null;
 	return JSON.stringify({
-		"fill": uniFillHex(drawing.brush || (drawing.spPr && drawing.spPr.Fill)),
+		"fill": uniFillHex(fillOf(drawing)),
 		"outline": line ? uniFillHex(line.Fill) : "",
 		// The outline's width (mm; EMUs in sdkjs) and dash (Asc.c_oDashType, solid without one)
 		"outlineWidth": line && typeof line.w === "number" ? line.w / 36000 : null,
 		"outlineDash": line && typeof line.prstDash === "number" ? line.prstDash : Asc.c_oDashType.solid,
 		// The fill's opacity (percent) and the shadow's preset ("" none, "custom" another one;
 		// null: charts, which sdkjs gives no shadows)
-		"opacity": opacityOf(drawing.brush || (drawing.spPr && drawing.spPr.Fill)),
+		"opacity": opacityOf(fillOf(drawing)),
+		"chartPart": isChart(drawing) ? chartPart : null,
 		"shadow": shadowOf(drawing),
 		"vert": bodyPr ? (bodyPr.vert != null ? bodyPr.vert : AscFormat.nVertTThorz) : null
 	});
@@ -504,6 +525,13 @@ function ascFill(api, fill) {
 	case "picture":
 		var picture = new Asc.asc_CFillBlip();
 		if (fill["type"] === "texture") {
+			// In sdkjs' image loader at once: the document editor applies a texture after its
+			// picture loaded (in a browser), else when the next one is applied
+			var texture = AscCommon.g_oUserTexturePresets[fill["texture"]];
+			if (texture && !api.ImageLoader.map_image_index[texture]) {
+				var size = window["native"] && window["native"]["GetImageOriginalSize"] ? window["native"]["GetImageOriginalSize"](texture) : null;
+				preloadImage(api, texture, size ? size["W"] : 1, size ? size["H"] : 1);
+			}
 			picture.asc_putTextureId(fill["texture"]);
 			picture.setType(Asc.c_oAscFillBlipType.TILE);
 		} else {
@@ -2273,6 +2301,8 @@ window["eoStartEngine"] = function () {
 			result["FontName"] = themeFontName(theme, textPr.FontFamily ? textPr.FontFamily.Name : "");
 			result["FontSize"] = textPr.FontSize || 0;
 			result["Strikeout"] = !!textPr.Strikeout;
+			result["Caps"] = !!textPr.Caps;
+			result["SmallCaps"] = !!textPr.SmallCaps;
 			result["VertAlign"] = textPr.VertAlign || 0;
 			var color = textPr.Color;
 			if (textPr.Unifill && textPr.Unifill.fill && textPr.Unifill.fill.color) {
@@ -2319,6 +2349,9 @@ window["eoStartEngine"] = function () {
 	engine["setFontName"] = function (name) { api.put_TextPrFontName(name); };
 	engine["setFontSize"] = function (size) { api.put_TextPrFontSize(size); };
 	engine["setStrikeout"] = function (value) { api.put_TextPrStrikeout(value); };
+	// Text documents: all caps or small caps
+	engine["setCaps"] = function (value) { api.put_TextPrCaps(value); };
+	engine["setSmallCaps"] = function (value) { api.put_TextPrSmallCaps(value); };
 	// 0 baseline, 1 subscript, 2 superscript
 	engine["setBaseline"] = function (value) { api.put_TextPrBaseline(value); };
 	// A color (see ascColor), or "" for automatic
@@ -3137,20 +3170,21 @@ window["eoStartEngine"] = function () {
 
 	// Fill of the selected shapes: a color (see ascColor), or "" for none
 	engine["setShapeFill"] = drawingCommand(function (hex) {
-		wholeCharts(editor.selectedDrawings());
+		chartParts(editor.selectedDrawings());
 		api.ShapeApply(shapeFill(hex));
 	});
 
 	// Outline of the selected shapes: a color (see ascColor; "" for none), a width in mm and a
 	// dash (Asc.c_oDashType)
 	engine["setShapeOutline"] = drawingCommand(function (hex, width, dash) {
-		wholeCharts(editor.selectedDrawings());
+		chartParts(editor.selectedDrawings());
 		api.ShapeApply(shapeOutline(hex, width, dash));
 	});
 
+	engine["setChartPart"] = function (part) { chartPart = part; };
 	// The selected drawings' fill's opacity (percent) and shadow (see shapeOpacity, shapeShadow)
 	engine["setShapeOpacity"] = drawingCommand(function (percent) {
-		wholeCharts(editor.selectedDrawings());
+		chartParts(editor.selectedDrawings());
 		api.ShapeApply(shapeOpacity(percent));
 	});
 	engine["setShapeShadow"] = drawingCommand(function (preset) { api.ShapeApply(shapeShadow(preset)); });
@@ -3173,7 +3207,7 @@ window["eoStartEngine"] = function () {
 		}
 	};
 	var setShapeFill = drawingCommand(function (fill) {
-		wholeCharts(editor.selectedDrawings());
+		chartParts(editor.selectedDrawings());
 		var properties = new Asc.asc_CShapeProperty();
 		properties.asc_putFill(ascFill(api, fill));
 		api.ShapeApply(properties);
@@ -3185,7 +3219,7 @@ window["eoStartEngine"] = function () {
 		}
 		var selected = editor.selectedDrawings();
 		var drawing = selected.length ? selected[0].drawing : null;
-		return JSON.stringify(drawing ? fillJson(drawing.brush || (drawing.spPr && drawing.spPr.Fill)) : null);
+		return JSON.stringify(drawing ? fillJson(fillOf(drawing)) : null);
 	};
 
 	// z-order of the selected drawings: 0 to front, 1 forward, 2 to back, 3 backward
@@ -4382,23 +4416,24 @@ function spreadsheetEngine(window, api) {
 	}
 
 	engine["setShapeFill"] = edit(function (hex) {
-		wholeCharts(selectedDrawings());
+		chartParts(selectedDrawings());
 		applyShapeProperties(shapeFill(hex));
 	});
 	engine["setShapeOutline"] = edit(function (hex, width, dash) {
-		wholeCharts(selectedDrawings());
+		chartParts(selectedDrawings());
 		applyShapeProperties(shapeOutline(hex, width, dash));
 	});
 	engine["setTextVert"] = edit(function (vert) { applyShapeProperties(shapeTextVert(vert)); });
+	engine["setChartPart"] = function (part) { chartPart = part; };
 	engine["setShapeOpacity"] = edit(function (percent) {
-		wholeCharts(selectedDrawings());
+		chartParts(selectedDrawings());
 		applyShapeProperties(shapeOpacity(percent));
 	});
 	engine["setShapeShadow"] = edit(function (preset) { applyShapeProperties(shapeShadow(preset)); });
 	// Fills of the selected shapes (target "shape", see ascFill)
 	engine["getFillResources"] = fillResourcesJson;
 	engine["setFill"] = edit(function (target, fill) {
-		wholeCharts(selectedDrawings());
+		chartParts(selectedDrawings());
 		var properties = new Asc.asc_CShapeProperty();
 		properties.asc_putFill(ascFill(api, fill));
 		if (fill["type"] === "picture" && fill["picture"]) {
@@ -4414,7 +4449,7 @@ function spreadsheetEngine(window, api) {
 	engine["getFill"] = function () {
 		var selected = selectedDrawings();
 		var drawing = selected.length ? selected[0].drawing : null;
-		return JSON.stringify(drawing ? fillJson(drawing.brush || (drawing.spPr && drawing.spPr.Fill)) : null);
+		return JSON.stringify(drawing ? fillJson(fillOf(drawing)) : null);
 	};
 	// 0 to front, 1 forward, 2 to back, 3 backward (c_oAscDrawingLayerType)
 	engine["arrange"] = edit(function (level) { api.asc_setSelectedDrawingObjectLayer(level); });

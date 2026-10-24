@@ -137,6 +137,19 @@ t.run("shape fills", function () {
 	t.eq("pattern", JSON.parse(eoEngine.getFill("shape")).type, "pattern");
 	eoEngine.setFill("shape", { "type": "none" });
 	t.eq("none", JSON.parse(eoEngine.getFill("shape")).type, "none");
+	// At once: sdkjs applies a texture after its picture loaded
+	eoEngine.setFill("shape", { "type": "texture", "texture": 4 });
+	t.eq("texture", eoEngine.getFill("shape"), JSON.stringify({ "type": "texture", "texture": 4 }));
+});
+t.run("chart fills", function () {
+	eoEngine.insertChart(0);
+	eoEngine.setFill("shape", { "type": "texture", "texture": 2 });
+	t.eq("a texture at once", JSON.parse(eoEngine.getFill("shape")).type, "texture");
+	eoEngine.setChartPart("plotArea");
+	eoEngine.setShapeFill("00FF00");
+	t.eq("the plot area's", JSON.parse(eoEngine.drawingColors()).fill, "00FF00");
+	eoEngine.setChartPart("chart");
+	t.eq("the chart's stays", JSON.parse(eoEngine.getFill("shape")).type, "texture");
 });
 t.noError("editing");
 t.done();
