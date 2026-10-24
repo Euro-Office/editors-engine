@@ -166,6 +166,34 @@ function shapeOutline(hex, width) {
 	return properties;
 }
 
+// sdkjs' print drawing of spreadsheets (cell fills, pictures in cells, headers and footers)
+// scales what it draws with a base transform, which core's graphics haven't: it is appended to
+// each transform set while it applies, as sdkjs' document renderer does (CDocumentRenderer)
+(function (graphics) {
+	var transform = graphics.transform, reset = graphics.reset;
+	graphics.SetBaseTransform = function (matrix) {
+		this.eoBaseTransform = matrix || null;
+	};
+	graphics.transform = function (sx, shy, shx, sy, tx, ty) {
+		var base = this.eoBaseTransform;
+		if (!base)
+			return transform.call(this, sx, shy, shx, sy, tx, ty);
+		var m = new AscCommon.CMatrix();
+		m.sx = sx; m.shy = shy; m.shx = shx; m.sy = sy; m.tx = tx; m.ty = ty;
+		AscCommon.global_MatrixTransformer.MultiplyAppend(m, base);
+		return transform.call(this, m.sx, m.shy, m.shx, m.sy, m.tx, m.ty);
+	};
+	graphics.transform3 = function (m) {
+		this.transform(m.sx, m.shy, m.shx, m.sy, m.tx, m.ty);
+	};
+	graphics.reset = function () {
+		if (this.eoBaseTransform)
+			this.transform(1, 0, 0, 1, 0, 0);
+		else
+			reset.call(this);
+	};
+})(AscCommon.CNativeGraphics.prototype);
+
 // A picture the app copied into the document's images directory, as if loaded: sdkjs' image
 // loader would load it in a browser
 function preloadImage(api, name, width, height) {
@@ -3291,7 +3319,14 @@ function spreadsheetEngine(window, api) {
 		g.BeginPage = g.EndPage = function () {};
 		var printer = new AscCommonExcel.CPdfPrinter(api.wb.fmgrGraphics[3], api.wb.m_oFont.clone());
 		printer.DocumentRenderer = g;
-		view().drawForPrint(printer, pageData, 0, [pageData]);
+		// The sheet, not a printed page: without its header and footer
+		var sheetView = view();
+		sheetView.drawHeaderFooter = function () {};
+		try {
+			sheetView.drawForPrint(printer, pageData, 0, [pageData]);
+		} finally {
+			delete sheetView.drawHeaderFooter;
+		}
 
 		g.Native["Destroy"]();
 		engine["tile"] = null;

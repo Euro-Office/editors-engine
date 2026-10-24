@@ -86,4 +86,14 @@ t.run("document fonts", function () {
 	t.ok("without the theme's placeholders", used.every(function (name) { return name.charAt(0) !== "+"; }));
 });
 t.noError("cells");
+t.run("draws sheets with a header and footer", function () {
+	// As "Stand der Dinge_2025.xlsx": the sheet's name above, the page number below
+	var headerFooter = Asc.editor.wb.getWorksheet().model.headerFooter;
+	headerFooter.setOddHeader("&C&A");
+	headerFooter.setOddFooter("&CSeite &P");
+	eoEngine.beginTile();
+	eoEngine.drawTile(0, 1024, Math.round(1024 * eoEngine.getPageHeight(0) / eoEngine.getPageWidth(0)), 0, 0, 256, 256);
+	t.ok("print drawing's base transform", typeof AscCommon.CNativeGraphics.prototype.SetBaseTransform === "function");
+});
+
 t.done();
