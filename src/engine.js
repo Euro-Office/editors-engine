@@ -199,6 +199,41 @@ AscCommon.CNativeGraphics.prototype.SetBaseTransform = function (matrix) {
 	this.m_oBaseTransform = matrix || null;
 };
 
+// Symbol's and Wingdings' characters (bullets) in the font that stands in for them (OpenSymbol):
+// sdkjs' own graphics take its glyphs for them (GetReplaceGlyph), core's draw the codes as they
+// are, letters ("§", "v", "Ø", "ü")
+(function (graphics) {
+	var fonts = AscFonts.g_fontApplication;
+	function setReplace(target, name) {
+		var info = { Name: "", Replace: null };
+		if (typeof name === "string" && fonts.g_fontDictionary.ChangeGlyphsMap[name])
+			fonts.GetFontInfoName(name, info);
+		target.eoReplace = info.Replace;
+	}
+	function replaced(target, code) {
+		return target.eoReplace ? fonts.GetReplaceGlyph(code, target.eoReplace) : code;
+	}
+	var setFont = graphics.SetFont;
+	graphics.SetFont = function (font) {
+		setReplace(this, font && font.FontFamily && font.FontFamily.Name);
+		return setFont.apply(this, arguments);
+	};
+	var setFontInternal = graphics.SetFontInternal;
+	graphics.SetFontInternal = function (name) {
+		setReplace(this, name);
+		return setFontInternal.apply(this, arguments);
+	};
+	graphics.FillText = function (x, y, text) {
+		this.Native["FillText"](x, y, replaced(this, text.charCodeAt(0)));
+	};
+	graphics.FillText2 = function (x, y, text, cropX, cropW) {
+		this.Native["FillText2"](x, y, replaced(this, text.charCodeAt(0)), cropX, cropW);
+	};
+	graphics.FillTextCode = function (x, y, code) {
+		this.Native["FillTextCode"](x, y, replaced(this, code));
+	};
+})(AscCommon.CNativeGraphics.prototype);
+
 // A picture the app copied into the document's images directory, as if loaded: sdkjs' image
 // loader would load it in a browser
 function preloadImage(api, name, width, height) {
