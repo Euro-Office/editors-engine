@@ -3361,18 +3361,34 @@ function spreadsheetEngine(window, api) {
 		pageData.scale = 1;
 		pageData.indexWorksheet = api.asc_getActiveWorksheetIndex();
 
-		// Print pages start at the page's origin: move it to the first cell
-		g.transform(1, 0, 0, 1, cols[c1], rows[r1]);
+		// Print pages start at the page's origin: move it to the first cell. Text at an angle sets
+		// the printer's transform (and resets it after): the graphics get that move too, the
+		// printer keeps sdkjs' transform, which sdkjs reads back. Drawings set the sheet's own
+		// places on the graphics.
+		var left = cols[c1], top = rows[r1];
+		g.transform(1, 0, 0, 1, left, top);
 		g.BeginPage = g.EndPage = function () {};
 		var printer = new AscCommonExcel.CPdfPrinter(api.wb.fmgrGraphics[3], api.wb.m_oFont.clone());
 		printer.DocumentRenderer = g;
-		// The sheet, not a printed page: without its header and footer
+		printer.setTransform = function (sx, shy, shx, sy, tx, ty) {
+			var m = this.Transform;
+			m.sx = sx; m.shy = shy; m.shx = shx; m.sy = sy; m.tx = tx; m.ty = ty;
+			this.InvertTransform = m.CreateDublicate();
+			this.InvertTransform.Invert();
+			g.transform(sx, shy, shx, sy, tx + left, ty + top);
+			return this;
+		};
+		// The sheet, not a printed page: without its header and footer. Text at an angle is
+		// clipped to its row across the screen's canvas, which the engine hasn't: across the page.
 		var sheetView = view();
+		var drawingCtx = sheetView.drawingCtx;
 		sheetView.drawHeaderFooter = function () {};
+		drawingCtx.getWidth = function () { return pageData.pageClipRectWidth; };
 		try {
 			sheetView.drawForPrint(printer, pageData, 0, [pageData]);
 		} finally {
 			delete sheetView.drawHeaderFooter;
+			delete drawingCtx.getWidth;
 		}
 
 		g.Native["Destroy"]();

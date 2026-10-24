@@ -124,4 +124,35 @@ t.run("text angle and direction", function () {
 	t.eq("left to right", t.state().sheet.cellFormat.rtl, false);
 });
 
+t.run("draws text at an angle in tiles", function () {
+	// Down45 in a column of its own, in a tile that starts at that column: sdkjs sets the text's
+	// transform (sheet coordinates) and resets it, the tile keeps its first cell's place
+	eoEngine.selectCells(12, 3, 12, 3);
+	eoEngine.setCellText("Down45");
+	eoEngine.selectCells(12, 3, 12, 3);
+	eoEngine.setTextAngle(-45);
+	eoEngine.getState();
+	var ws = Asc.editor.wb.getWorksheet();
+	var mmPerPx = 25.4 / 96;
+	var left = (ws._getColLeft(12) - ws._getColLeft(0)) * mmPerPx;
+	var pageWidth = Math.round(eoEngine.getPageWidth(0) / mmPerPx), pageHeight = Math.round(eoEngine.getPageHeight(0) / mmPerPx);
+	var transforms = [];
+	var transform = AscCommon.CNativeGraphics.prototype.transform;
+	AscCommon.CNativeGraphics.prototype.transform = function (sx, shy, shx, sy, tx, ty) {
+		transforms.push([sx, shy, shx, sy, tx, ty]);
+		return transform.apply(this, arguments);
+	};
+	try {
+		eoEngine.beginTile();
+		eoEngine.drawTile(0, pageWidth, pageHeight, Math.round(left / mmPerPx), 0, 256, 256);
+	} finally {
+		AscCommon.CNativeGraphics.prototype.transform = transform;
+	}
+	var rotated = transforms.filter(function (m) { return Math.abs(m[1]) > 0.5; });
+	t.ok("the text is rotated", rotated.length > 0);
+	t.ok("in its cell: " + rotated.map(function (m) { return m[4].toFixed(1); }).join() + " from " + left.toFixed(1),
+		rotated.every(function (m) { return m[4] >= left && m[4] < left + 30; }));
+	var last = transforms[transforms.length - 1];
+	t.ok("then back at the tile's first cell: " + last.join(), last[0] === 1 && Math.abs(last[4] - left) < 0.01);
+});
 t.done();
