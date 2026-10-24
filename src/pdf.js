@@ -1376,6 +1376,8 @@ function pdfEngine(api) {
 	// A color as "RRGGBB", "" for none
 	engine["setShapeFill"] = shapeCommand(function (hex) { api.ShapeApply(shapeFill(hex)); });
 	engine["setShapeOutline"] = shapeCommand(function (hex, width, dash) { api.ShapeApply(shapeOutline(hex, width, dash)); });
+	engine["setShapeOpacity"] = shapeCommand(function (percent) { api.ShapeApply(shapeOpacity(percent)); });
+	engine["setShapeShadow"] = shapeCommand(function (preset) { api.ShapeApply(shapeShadow(preset)); });
 	engine["setTextVert"] = shapeCommand(function (vert) { api.ShapeApply(shapeTextVert(vert)); });
 	// 0 to front, 1 forward, 2 to back, 3 backward
 	engine["arrange"] = shapeCommand(function (level) {

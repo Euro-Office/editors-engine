@@ -402,6 +402,17 @@ function wholeCharts(selected) {
 	});
 }
 
+function opacityOf(fill) {
+	return fill && typeof fill.transparent === "number" ? Math.round(fill.transparent / 2.55) : 100;
+}
+
+function shadowOf(drawing) {
+	if (drawing.getObjectType() === AscDFH.historyitem_type_ChartSpace || !drawing.getOuterShdwAsc)
+		return null;
+	var shadow = drawing.getOuterShdwAsc();
+	return shadow ? (shadow.getPreset() || "custom") : "";
+}
+
 function drawingColorsJson(selected) {
 	var drawing = selected.length ? selected[0].drawing : null;
 	if (!drawing)
@@ -414,8 +425,34 @@ function drawingColorsJson(selected) {
 		// The outline's width (mm; EMUs in sdkjs) and dash (Asc.c_oDashType, solid without one)
 		"outlineWidth": line && typeof line.w === "number" ? line.w / 36000 : null,
 		"outlineDash": line && typeof line.prstDash === "number" ? line.prstDash : Asc.c_oDashType.solid,
+		// The fill's opacity (percent) and the shadow's preset ("" none, "custom" another one;
+		// null: charts, which sdkjs gives no shadows)
+		"opacity": opacityOf(drawing.brush || (drawing.spPr && drawing.spPr.Fill)),
+		"shadow": shadowOf(drawing),
 		"vert": bodyPr ? (bodyPr.vert != null ? bodyPr.vert : AscFormat.nVertTThorz) : null
 	});
+}
+
+// Shape properties with the fill's opacity (percent; its color and kind stay), as web-apps sets it
+function shapeOpacity(percent) {
+	var fill = new Asc.asc_CShapeFill();
+	fill.asc_putTransparent(Math.round(percent * 2.55));
+	var properties = new Asc.asc_CShapeProperty();
+	properties.asc_putFill(fill);
+	return properties;
+}
+
+// Shape properties with an outer shadow: web-apps' presets by where it falls ("tl", "t", "tr",
+// "l", "ctr", "r", "bl", "b", "br"), "" for none
+function shapeShadow(preset) {
+	var properties = new Asc.asc_CShapeProperty();
+	var shadow = null;
+	if (preset) {
+		shadow = new Asc.asc_CShadowProperty();
+		shadow.putPreset(preset);
+	}
+	properties.asc_putShadow(shadow);
+	return properties;
 }
 
 // Shape properties with the direction of the text: 1 horizontal, 3 rotated down, 4 rotated up
@@ -3111,6 +3148,13 @@ window["eoStartEngine"] = function () {
 		api.ShapeApply(shapeOutline(hex, width, dash));
 	});
 
+	// The selected drawings' fill's opacity (percent) and shadow (see shapeOpacity, shapeShadow)
+	engine["setShapeOpacity"] = drawingCommand(function (percent) {
+		wholeCharts(editor.selectedDrawings());
+		api.ShapeApply(shapeOpacity(percent));
+	});
+	engine["setShapeShadow"] = drawingCommand(function (preset) { api.ShapeApply(shapeShadow(preset)); });
+
 	// The direction of the selected shapes' text (see shapeTextVert)
 	engine["setTextVert"] = drawingCommand(function (vert) {
 		api.ShapeApply(shapeTextVert(vert));
@@ -4346,6 +4390,11 @@ function spreadsheetEngine(window, api) {
 		applyShapeProperties(shapeOutline(hex, width, dash));
 	});
 	engine["setTextVert"] = edit(function (vert) { applyShapeProperties(shapeTextVert(vert)); });
+	engine["setShapeOpacity"] = edit(function (percent) {
+		wholeCharts(selectedDrawings());
+		applyShapeProperties(shapeOpacity(percent));
+	});
+	engine["setShapeShadow"] = edit(function (preset) { applyShapeProperties(shapeShadow(preset)); });
 	// Fills of the selected shapes (target "shape", see ascFill)
 	engine["getFillResources"] = fillResourcesJson;
 	engine["setFill"] = edit(function (target, fill) {

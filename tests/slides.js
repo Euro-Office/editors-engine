@@ -48,6 +48,7 @@ t.run("fills the whole chart", function () {
 	chart.selection.plotArea = chart.chart.plotArea;
 	eoEngine.setShapeOutline("0000FF", 1, Asc.c_oDashType.dash);
 	t.eq("the chart's outline", JSON.parse(eoEngine.drawingColors()).outline, "0000FF");
+	t.eq("no shadows for charts", JSON.parse(eoEngine.drawingColors()).shadow, null);
 });
 t.run("titles a chart, reads its colors", function () {
 	eoEngine.setChartTitles("Sales", "Quarter", "Euro");
@@ -222,6 +223,18 @@ t.run("outlines: width and dash", function () {
 	t.eq("dash", colors.outlineDash, Asc.c_oDashType.sysDot);
 	eoEngine.setShapeOutline("FF0000", 2.12, Asc.c_oDashType.solid);
 	t.eq("solid again", JSON.parse(eoEngine.drawingColors()).outlineDash, Asc.c_oDashType.solid);
+});
+t.run("opacity and shadow", function () {
+	eoEngine.insertShape("rect");
+	eoEngine.setShapeFill("00FF00");
+	eoEngine.setShapeOpacity(40);
+	var colors = JSON.parse(eoEngine.drawingColors());
+	t.eq("opacity", colors.opacity, 40);
+	t.eq("the color stays", colors.fill, "00FF00");
+	eoEngine.setShapeShadow("br");
+	t.eq("shadow", JSON.parse(eoEngine.drawingColors()).shadow, "br");
+	eoEngine.setShapeShadow("");
+	t.eq("no shadow", JSON.parse(eoEngine.drawingColors()).shadow, "");
 });
 t.run("fills", function () {
 	var resources = JSON.parse(eoEngine.getFillResources());
