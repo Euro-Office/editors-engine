@@ -131,6 +131,36 @@ t.run("text angle and direction", function () {
 	eoEngine.setRtl(false);
 	t.eq("left to right", t.state().sheet.cellFormat.rtl, false);
 });
+t.run("text in shapes", function () {
+	eoEngine.selectCells(2, 20, 2, 20);
+	eoEngine.insertTextBox();
+	var state = t.state();
+	t.ok("a text box with the cursor in it", state.cursor !== null && state.drawings.length === 1);
+	eoEngine.setComposingText("Hel");
+	eoEngine.commitText("Hello");
+	eoEngine.enterText(" there");
+	eoEngine.keyDown(8, false, false); // Backspace
+	var box = Asc.editor.wb.getWorksheet().objectRender.controller.getSelectedArray()[0];
+	t.eq("typed text", box.getDocContent().GetText().trim(), "Hello ther");
+	eoEngine.keyDown(65, false, true); // Ctrl+A
+	state = t.state();
+	t.ok("its text selected", state.cursor === null && state.selection.length > 0);
+	t.eq("copied as text", JSON.parse(eoEngine.copy()).text.trim(), "Hello ther");
+	var frame = state.drawings[0].points;
+	t.ok("in the box's frame", state.selection[0].points[0] >= frame[0] - 0.1 && state.selection[0].points[1] >= frame[1] - 0.1);
+	eoEngine.setBold(true);
+	t.eq("formatting goes to the text", t.state().interface.Bold, true);
+	eoEngine.keyDown(27, false, false); // Escape
+	state = t.state();
+	t.ok("the box selected, without a cursor", state.cursor === null && state.selection.length === 0 && state.drawings.length === 1);
+	// A tap into the selected box's text puts the cursor there again
+	var x = (frame[0] + frame[2]) / 2, y = (frame[1] + frame[5]) / 2;
+	eoEngine.mouseDrawing(0, x, y, 1, false);
+	eoEngine.mouseDrawing(2, x, y, 1, false);
+	t.ok("the cursor in it again", t.state().cursor !== null);
+	eoEngine.selectCells(0, 0, 0, 0);
+	t.ok("cells again", t.state().cursor === null && t.state().drawings.length === 0);
+});
 t.run("cell styles", function () {
 	var names = JSON.parse(eoEngine.getCellStyles());
 	t.ok("built-in styles: " + names.length, names.indexOf("Good") >= 0 && names.indexOf("Heading 1") >= 0);

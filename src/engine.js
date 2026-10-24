@@ -4173,6 +4173,7 @@ function spreadsheetEngine(window, api) {
 			"openUrl": openUrl,
 			"coEditing": engine["coEditingState"]()
 		};
+		textState(state);
 		changed = false;
 		geometryChanged = false;
 		lastError = null;
@@ -4488,8 +4489,56 @@ function spreadsheetEngine(window, api) {
 		if (objectRender.drawingDocument && !objectRender.drawingDocument.eoHitContext) {
 			objectRender.drawingDocument.CanvasHitContext = createHitContext();
 			objectRender.drawingDocument.eoHitContext = true;
+			keepTextCursor(objectRender.drawingDocument);
 		}
 		return objectRender.controller;
+	}
+
+	// The text of a shape being edited: its cursor and selection, which the drawing document
+	// would draw into the web editor's page, are kept for the state (see textState)
+	var textCursor = null;
+	var textSelection = [];
+	function keepTextCursor(drawingDocument) {
+		drawingDocument.UpdateTargetTransform = function (matrix) { this.TextMatrix = matrix; };
+		drawingDocument.UpdateTarget = function (x, y) {
+			textCursor = { x: x, y: y, matrix: this.TextMatrix ? this.TextMatrix.CreateDublicate() : null };
+		};
+		drawingDocument.TargetShow = drawingDocument.CheckTargetShow = function () {};
+		drawingDocument.TargetStart = function () {};
+		drawingDocument.TargetEnd = function () { textCursor = null; };
+		drawingDocument.SelectEnabled = drawingDocument.SelectClear = drawingDocument.SelectShow = function () {};
+		drawingDocument.AddPageSelection = function (page, x, y, w, h) {
+			var matrix = this.TextMatrix, points = [];
+			[[x, y], [x + w, y], [x + w, y + h], [x, y + h]].forEach(function (corner) {
+				points.push(matrix ? matrix.TransformPointX(corner[0], corner[1]) : corner[0],
+					matrix ? matrix.TransformPointY(corner[0], corner[1]) : corner[1]);
+			});
+			textSelection.push({ "page": 0, "points": points });
+		};
+	}
+	function editedText() {
+		return view().isSelectOnShape ? drawingController().getTargetDocContent() : null;
+	}
+	// The state's cursor ({page, x1, y1, x2, y2}) and selection, in sheet millimeters
+	function textState(state) {
+		var content = editedText();
+		if (!content)
+			return;
+		var controller = drawingController(), drawingDocument = controller.drawingObjects.getDrawingDocument();
+		textCursor = null;
+		textSelection = [];
+		controller.updateSelectionState();
+		if (content.IsSelectionUse() && !content.IsSelectionEmpty()) {
+			controller.drawTextSelection(0);
+			state["selection"] = textSelection;
+		} else if (textCursor) {
+			var m = textCursor.matrix, height = drawingDocument.m_dTargetSize;
+			var point = function (x, y) { return m ? [m.TransformPointX(x, y), m.TransformPointY(x, y)] : [x, y]; };
+			var top = point(textCursor.x, textCursor.y), bottom = point(textCursor.x, textCursor.y + height);
+			state["cursor"] = { "page": 0, "x1": top[0], "y1": top[1], "x2": bottom[0], "y2": bottom[1] };
+		}
+		// The shape's frame while its text is edited
+		state["drawings"] = drawingStates(controller.getSelectedArray().map(function (drawing) { return { drawing: drawing, page: 0 }; }), controller);
 	}
 
 	function selectedDrawings() {
@@ -4545,8 +4594,60 @@ function spreadsheetEngine(window, api) {
 	});
 
 	engine["insertShape"] = edit(function (preset) {
+		engine["finishComposingText"]();
 		api.asc_addShapeOnSheet(preset);
 		view().setSelectionShape(drawingController().getSelectedArray().length > 0);
+	});
+	// A text box at the active cell, taking the typing
+	engine["insertTextBox"] = function () {
+		engine["insertShape"]("textRect");
+		drawingController().CreateDocContent();
+	};
+
+	// Typing into the text of the selected shape (see editedText), as in the other editors
+	engine["keyDown"] = edit(function (keyCode, shift, ctrl) {
+		engine["finishComposingText"]();
+		var e = new AscCommon.CKeyboardEvent();
+		e.KeyCode = keyCode;
+		e.ShiftKey = shift;
+		e.CtrlKey = ctrl;
+		view().objectRender.graphicObjectKeyDown(e);
+		// Escape leaves the text, its shape stays selected
+		view().setSelectionShape(drawingController().getSelectedArray().length > 0);
+	});
+	function codePoints(text) {
+		var codes = [];
+		for (var i = 0; i < text.length; ++i) {
+			var code = text.codePointAt(i);
+			codes.push(code);
+			if (code > 0xFFFF)
+				++i;
+		}
+		return codes;
+	}
+	engine["enterText"] = edit(function (text) { drawingController().enterText(codePoints(text)); });
+	// Text the keyboard is still composing (suggestions); replaced until it's committed
+	var composing = false;
+	// (The sheet's drawings take it, as WorkbookView gives it them; the API's methods do nothing here)
+	engine["setComposingText"] = edit(function (text) {
+		if (!composing) {
+			view().objectRender.Begin_CompositeInput();
+			composing = true;
+		}
+		view().objectRender.Replace_CompositeText(codePoints(text));
+	});
+	engine["finishComposingText"] = function () {
+		if (composing)
+			view().objectRender.End_CompositeInput();
+		composing = false;
+	};
+	engine["commitText"] = edit(function (text) {
+		if (composing) {
+			view().objectRender.Replace_CompositeText(codePoints(text));
+			engine["finishComposingText"]();
+		} else {
+			drawingController().enterText(codePoints(text));
+		}
 	});
 
 	function applyShapeProperties(shapeProperties) {
