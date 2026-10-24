@@ -1375,7 +1375,7 @@ function pdfEngine(api) {
 	engine["drawingColors"] = function () { return drawingColorsJson(selectedShapes()); };
 	// A color as "RRGGBB", "" for none
 	engine["setShapeFill"] = shapeCommand(function (hex) { api.ShapeApply(shapeFill(hex)); });
-	engine["setShapeOutline"] = shapeCommand(function (hex, width) { api.ShapeApply(shapeOutline(hex, width)); });
+	engine["setShapeOutline"] = shapeCommand(function (hex, width, dash) { api.ShapeApply(shapeOutline(hex, width, dash)); });
 	engine["setTextVert"] = shapeCommand(function (vert) { api.ShapeApply(shapeTextVert(vert)); });
 	// 0 to front, 1 forward, 2 to back, 3 backward
 	engine["arrange"] = shapeCommand(function (level) {

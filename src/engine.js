@@ -173,12 +173,15 @@ function shapeFill(hex) {
 }
 
 // Shape properties with an outline: a color (see ascColor; "" for none) and a width in mm
-function shapeOutline(hex, width) {
+function shapeOutline(hex, width, dash) {
 	var stroke = new Asc.asc_CStroke();
 	if (hex) {
 		stroke.asc_putType(Asc.c_oAscStrokeType.STROKE_COLOR);
 		stroke.asc_putColor(ascColor(hex));
 		stroke.asc_putWidth(width);
+		// Asc.c_oDashType (solid, sysDot, sysDash, dash, ...)
+		if (typeof dash === "number" && dash >= 0)
+			stroke.asc_putPrstDash(dash);
 	} else {
 		stroke.asc_putType(Asc.c_oAscStrokeType.STROKE_NONE);
 	}
@@ -390,6 +393,15 @@ function uniFillHex(fill) {
 // The fill and outline of the first of the selected drawings ([{drawing}]), as JSON
 // {fill, outline} (see uniFillHex), and the direction of its text (vert, see shapeTextVert;
 // null without text); "null" without one
+// Fills and outlines of selected charts go to the whole chart: sdkjs gives them to the part of
+// it selected inside it (the plot area, a series, ... after another tap), or else the chart
+function wholeCharts(selected) {
+	selected.forEach(function (item) {
+		if (item.drawing.getObjectType() === AscDFH.historyitem_type_ChartSpace)
+			item.drawing.resetSelection(false);
+	});
+}
+
 function drawingColorsJson(selected) {
 	var drawing = selected.length ? selected[0].drawing : null;
 	if (!drawing)
@@ -399,6 +411,9 @@ function drawingColorsJson(selected) {
 	return JSON.stringify({
 		"fill": uniFillHex(drawing.brush || (drawing.spPr && drawing.spPr.Fill)),
 		"outline": line ? uniFillHex(line.Fill) : "",
+		// The outline's width (mm; EMUs in sdkjs) and dash (Asc.c_oDashType, solid without one)
+		"outlineWidth": line && typeof line.w === "number" ? line.w / 36000 : null,
+		"outlineDash": line && typeof line.prstDash === "number" ? line.prstDash : Asc.c_oDashType.solid,
 		"vert": bodyPr ? (bodyPr.vert != null ? bodyPr.vert : AscFormat.nVertTThorz) : null
 	});
 }
@@ -3085,12 +3100,15 @@ window["eoStartEngine"] = function () {
 
 	// Fill of the selected shapes: a color (see ascColor), or "" for none
 	engine["setShapeFill"] = drawingCommand(function (hex) {
+		wholeCharts(editor.selectedDrawings());
 		api.ShapeApply(shapeFill(hex));
 	});
 
-	// Outline of the selected shapes: a color (see ascColor; "" for none) and a width in mm
-	engine["setShapeOutline"] = drawingCommand(function (hex, width) {
-		api.ShapeApply(shapeOutline(hex, width));
+	// Outline of the selected shapes: a color (see ascColor; "" for none), a width in mm and a
+	// dash (Asc.c_oDashType)
+	engine["setShapeOutline"] = drawingCommand(function (hex, width, dash) {
+		wholeCharts(editor.selectedDrawings());
+		api.ShapeApply(shapeOutline(hex, width, dash));
 	});
 
 	// The direction of the selected shapes' text (see shapeTextVert)
@@ -3111,6 +3129,7 @@ window["eoStartEngine"] = function () {
 		}
 	};
 	var setShapeFill = drawingCommand(function (fill) {
+		wholeCharts(editor.selectedDrawings());
 		var properties = new Asc.asc_CShapeProperty();
 		properties.asc_putFill(ascFill(api, fill));
 		api.ShapeApply(properties);
@@ -4318,12 +4337,19 @@ function spreadsheetEngine(window, api) {
 		api.asc_setGraphicObjectProps(properties);
 	}
 
-	engine["setShapeFill"] = edit(function (hex) { applyShapeProperties(shapeFill(hex)); });
-	engine["setShapeOutline"] = edit(function (hex, width) { applyShapeProperties(shapeOutline(hex, width)); });
+	engine["setShapeFill"] = edit(function (hex) {
+		wholeCharts(selectedDrawings());
+		applyShapeProperties(shapeFill(hex));
+	});
+	engine["setShapeOutline"] = edit(function (hex, width, dash) {
+		wholeCharts(selectedDrawings());
+		applyShapeProperties(shapeOutline(hex, width, dash));
+	});
 	engine["setTextVert"] = edit(function (vert) { applyShapeProperties(shapeTextVert(vert)); });
 	// Fills of the selected shapes (target "shape", see ascFill)
 	engine["getFillResources"] = fillResourcesJson;
 	engine["setFill"] = edit(function (target, fill) {
+		wholeCharts(selectedDrawings());
 		var properties = new Asc.asc_CShapeProperty();
 		properties.asc_putFill(ascFill(api, fill));
 		if (fill["type"] === "picture" && fill["picture"]) {

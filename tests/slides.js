@@ -35,6 +35,20 @@ t.run("formats a selected chart's text", function () {
 	eoEngine.setBold(bold);
 	t.eq("and back", !!t.state().interface.Bold, bold);
 });
+t.run("fills the whole chart", function () {
+	var presentation = Asc.editor.WordControl.m_oLogicDocument;
+	var shapes = presentation.Slides[presentation.CurPage].cSld.spTree;
+	var chart = shapes[shapes.length - 1];
+	// Its plot area selected inside it (a second tap)
+	chart.selection.plotArea = chart.chart.plotArea;
+	var plotFill = chart.chart.plotArea.spPr && chart.chart.plotArea.spPr.Fill;
+	eoEngine.setShapeFill("FF0000");
+	t.eq("the chart's fill", JSON.parse(eoEngine.drawingColors()).fill, "FF0000");
+	t.ok("not the plot area's", (chart.chart.plotArea.spPr && chart.chart.plotArea.spPr.Fill) === plotFill);
+	chart.selection.plotArea = chart.chart.plotArea;
+	eoEngine.setShapeOutline("0000FF", 1, Asc.c_oDashType.dash);
+	t.eq("the chart's outline", JSON.parse(eoEngine.drawingColors()).outline, "0000FF");
+});
 t.run("titles a chart, reads its colors", function () {
 	eoEngine.setChartTitles("Sales", "Quarter", "Euro");
 	var chart = eoEngine.chartState();
@@ -198,6 +212,16 @@ t.run("list presets", function () {
 	eoEngine.setListPreset("bullets", 2);
 	t.eq("bullets now", JSON.parse(eoEngine.getListPresets()).bullets, 2);
 	t.eq("bullets in the state", t.state().format.List, 0);
+});
+t.run("outlines: width and dash", function () {
+	eoEngine.insertShape("rect");
+	eoEngine.setShapeOutline("FF0000", 2.12, Asc.c_oDashType.sysDot);
+	var colors = JSON.parse(eoEngine.drawingColors());
+	t.eq("color", colors.outline, "FF0000");
+	t.ok("width", Math.abs(colors.outlineWidth - 2.12) < 0.01);
+	t.eq("dash", colors.outlineDash, Asc.c_oDashType.sysDot);
+	eoEngine.setShapeOutline("FF0000", 2.12, Asc.c_oDashType.solid);
+	t.eq("solid again", JSON.parse(eoEngine.drawingColors()).outlineDash, Asc.c_oDashType.solid);
 });
 t.run("fills", function () {
 	var resources = JSON.parse(eoEngine.getFillResources());
