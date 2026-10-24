@@ -371,6 +371,11 @@ namespace eo
 		m_private->imageCache = NSImages::NSFilesCache::Create(g_fonts);
 		m_private->builder.reset(new CDocBuilder());
 		m_private->builder->SetTmpFolder(tempDir.c_str());
+		// sdkjs' native calls get no temporary directory and take the process's (on Android none
+		// to write to, and core terminates on a picture it can't write there); for PDFs, core's
+		// readers share where they put the file's embedded fonts, so the pages would lose them too
+		NSDirectory::CreateDirectories(tempDir);
+		NSFile::CFileBinary::SetTempPath(tempDir);
 		Timer timer;
 		// An encrypted file is decrypted first: docbuilder takes the kind of document from the
 		// file it opens, which for an encrypted one is an encrypted container
@@ -434,10 +439,6 @@ namespace eo
 	{
 		Timer timer;
 		m_private->builder->CloseFile();
-		// sdkjs' reader gets no temporary directory and takes the process's (on Android none to
-		// write to); core's readers share where they put the file's embedded fonts, so the pages
-		// would lose them too
-		NSFile::CFileBinary::SetTempPath(tempDir);
 		m_private->pdfCopy = tempDir + L"/original.pdf";
 		m_private->pdfPages.reset(new DrawingDocument());
 		DrawingDocument::OpenResult opened = NSFile::CFileBinary::Copy(path, m_private->pdfCopy)

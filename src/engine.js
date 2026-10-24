@@ -263,6 +263,22 @@ function takeImage() {
 	};
 })(AscCommon.CNativeGraphics.prototype);
 
+// The size of a picture given as a data URL, once each: sdkjs asks for a texture's on each
+// drawing, and core writes the picture to a temporary file every time
+(function (native) {
+	var originalSize = native && native["GetImageOriginalSize"];
+	if (!originalSize)
+		return;
+	var sizes = {};
+	native["GetImageOriginalSize"] = function (src) {
+		if (typeof src !== "string" || src.indexOf("data:") !== 0)
+			return originalSize.call(native, src);
+		if (!(src in sizes))
+			sizes[src] = originalSize.call(native, src);
+		return sizes[src];
+	};
+})(window["native"]);
+
 // Hit testing of shapes and pictures. sdkjs builds a shape's outline on a canvas and asks
 // isPointInPath; native.js's canvas always answers no, so nothing can be tapped. This context
 // records the path (curves as line segments) and answers with the nonzero winding rule.
