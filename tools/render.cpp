@@ -309,11 +309,11 @@ int main(int argc, char* argv[])
 			if (arg.size() < 3 || arg.substr(arg.size() - 3) != ".js")
 			{
 				start = std::chrono::steady_clock::now();
-				// EO_SAVE_PASSWORD: saved encrypted with it
-				const char* savePassword = getenv("EO_SAVE_PASSWORD");
+				// EO_SAVE_PASSWORD: saved encrypted with it ("" without a password), as the apps set it
+				if (const char* savePassword = getenv("EO_SAVE_PASSWORD"))
+					document.SetPassword(ToWide(savePassword));
 				std::wstring extension = ToWide(arg.substr(arg.find_last_of('.') + 1));
-				int error = savePassword ? document.SaveWithPassword(ToWide(arg), extension, ToWide(savePassword))
-				                         : document.Save(ToWide(arg), extension);
+				int error = document.Save(ToWide(arg), extension);
 				std::cout << "save " << arg << " (" << MillisecondsSince(start) << " ms): " << error << std::endl;
 				continue;
 			}

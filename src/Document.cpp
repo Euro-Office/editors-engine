@@ -343,6 +343,8 @@ namespace eo
 			L"</m_sFontDir><m_sAllFontsPath>" + XmlEscape(g_runtimeDir + L"/fonts/AllFonts.js") +
 			L"</m_sAllFontsPath><m_bIsNoBase64>true</m_bIsNoBase64><m_sTempDir>" + XmlEscape(tempDir) +
 			L"</m_sTempDir></TaskQueueDataConvert>";
+		// Before docbuilder, which creates it
+		NSDirectory::CreateDirectories(tempDir);
 		std::wstring taskPath = tempDir + L"/decrypt.xml";
 		NSFile::CFileBinary::SaveToFile(taskPath, task, true);
 		int result = RunX2t(taskPath);
@@ -500,6 +502,12 @@ namespace eo
 		// PDF and other exports aren't encrypted with the document's password
 		bool keepsPassword = extension != L"pdf" && extension != L"txt" && extension != L"csv" && extension != L"html";
 		return SaveWithPassword(path, extension, keepsPassword ? m_private->password : L"");
+	}
+
+	void Document::SetPassword(const std::wstring& password)
+	{
+		m_private->password = password;
+		m_private->Run(L"eoEngine.passwordChanged = true;");
 	}
 
 	int Document::SaveWithPassword(const std::wstring& path, const std::wstring& extension, const std::wstring& password)

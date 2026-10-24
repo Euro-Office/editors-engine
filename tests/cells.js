@@ -108,5 +108,20 @@ t.run("theme colors", function () {
 	eoEngine.setCellFill("");
 	t.eq("no fill", t.state().sheet.cellFormat.fill, "");
 });
+t.run("text angle and direction", function () {
+	eoEngine.selectCells(9, 9, 9, 9);
+	eoEngine.setCellText("Tilted");
+	eoEngine.selectCells(9, 9, 9, 9);
+	eoEngine.setTextAngle(45);
+	t.eq("tilted up", t.state().sheet.cellFormat.angle, 45);
+	eoEngine.setTextAngle(255);
+	t.eq("vertical", t.state().sheet.cellFormat.angle, 255);
+	eoEngine.setTextAngle(0);
+	t.eq("horizontal", t.state().sheet.cellFormat.angle, 0);
+	eoEngine.setRtl(true);
+	t.eq("right to left", t.state().sheet.cellFormat.rtl, true);
+	eoEngine.setRtl(false);
+	t.eq("left to right", t.state().sheet.cellFormat.rtl, false);
+});
 
 t.done();

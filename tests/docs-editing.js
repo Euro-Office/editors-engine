@@ -79,5 +79,30 @@ t.run("theme colors", function () {
 	eoEngine.undo();
 	eoEngine.undo();
 });
+t.run("line spacing and direction", function () {
+	eoEngine.keyDown(36, false, true); // Ctrl+Home
+	eoEngine.setLineSpacing(2, 8); // exactly 8 mm
+	var format = t.state().format;
+	t.eq("exactly", format.LineRule, 2);
+	t.ok("8 mm", Math.abs(format.Line - 8) < 0.01);
+	eoEngine.setLineSpacing(0, 5); // at least 5 mm
+	t.eq("at least", t.state().format.LineRule, 0);
+	eoEngine.setLineSpacing(1, 1.25);
+	t.ok("multiple", t.state().format.LineRule === 1 && Math.abs(t.state().format.Line - 1.25) < 0.01);
+	eoEngine.setRtl(true);
+	t.eq("right to left", t.state().format.Rtl, true);
+	eoEngine.setRtl(false);
+	t.eq("left to right", t.state().format.Rtl, false);
+	for (var i = 0; i < 5; i++)
+		eoEngine.undo();
+});
+t.run("text direction in shapes", function () {
+	eoEngine.insertShape("rect");
+	t.eq("horizontal", JSON.parse(eoEngine.drawingColors()).vert, 1);
+	eoEngine.setTextVert(4);
+	t.eq("rotated up", JSON.parse(eoEngine.drawingColors()).vert, 4);
+	eoEngine.setTextVert(3);
+	t.eq("rotated down", JSON.parse(eoEngine.drawingColors()).vert, 3);
+});
 t.noError("editing");
 t.done();

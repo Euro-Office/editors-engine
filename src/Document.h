@@ -56,6 +56,9 @@ namespace eo
 		int Save(const std::wstring& path, const std::wstring& extension);
 		// The same, with the given password instead of the file's ("" for none)
 		int SaveWithPassword(const std::wstring& path, const std::wstring& extension, const std::wstring& password);
+		// The password to save the document with from now on ("" for none). The document counts
+		// as modified until it is saved.
+		void SetPassword(const std::wstring& password);
 
 		// Runs JavaScript in the document's context (see engine.js for the editing
 		// commands) and returns its result if that is a string

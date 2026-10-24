@@ -1300,6 +1300,7 @@ function pdfEngine(api) {
 		}
 		if (paraPr) {
 			state["interface"]["PrAlign"] = paraPr.Jc;
+			result["Rtl"] = !!paraPr.Bidi;
 			if (paraPr.Spacing) {
 				result["LineRule"] = paraPr.Spacing.LineRule;
 				result["Line"] = paraPr.Spacing.Line;
@@ -1343,6 +1344,7 @@ function pdfEngine(api) {
 			api.DecreaseIndent();
 	};
 	engine["setLineSpacing"] = function (rule, value) { api.put_PrLineSpacing(rule, value); };
+	engine["setRtl"] = function (rtl) { api.asc_setRtlTextDirection(rtl); };
 	engine["setParagraphSpacing"] = function (before, after) {
 		api.put_LineSpacingBeforeAfter(0, before);
 		api.put_LineSpacingBeforeAfter(1, after);
@@ -1385,6 +1387,7 @@ function pdfEngine(api) {
 	// A color as "RRGGBB", "" for none
 	engine["setShapeFill"] = shapeCommand(function (hex) { api.ShapeApply(shapeFill(hex)); });
 	engine["setShapeOutline"] = shapeCommand(function (hex, width) { api.ShapeApply(shapeOutline(hex, width)); });
+	engine["setTextVert"] = shapeCommand(function (vert) { api.ShapeApply(shapeTextVert(vert)); });
 	// 0 to front, 1 forward, 2 to back, 3 backward
 	engine["arrange"] = shapeCommand(function (level) {
 		[api.shapes_bringToFront, api.shapes_bringForward, api.shapes_bringToBack, api.shapes_bringBackward][level].call(api);

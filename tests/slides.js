@@ -167,5 +167,15 @@ t.run("theme colors", function () {
 	t.eq("the fill changed with them", JSON.parse(eoEngine.drawingColors()).fill, changed.theme[30]);
 	eoEngine.undo();
 });
+t.run("text direction", function () {
+	eoEngine.insertShape("rect");
+	t.eq("horizontal", JSON.parse(eoEngine.drawingColors()).vert, 1);
+	eoEngine.setTextVert(4);
+	t.eq("rotated up", JSON.parse(eoEngine.drawingColors()).vert, 4);
+	eoEngine.insertTextBox(0, 100, 100);
+	eoEngine.enterText("RTL");
+	eoEngine.setRtl(true);
+	t.eq("right to left", t.state().format.Rtl, true);
+});
 t.noError("slides");
 t.done();

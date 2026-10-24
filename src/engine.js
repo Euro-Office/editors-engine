@@ -314,16 +314,27 @@ function uniFillHex(fill) {
 }
 
 // The fill and outline of the first of the selected drawings ([{drawing}]), as JSON
-// {fill, outline} (see uniFillHex), "null" without one
+// {fill, outline} (see uniFillHex), and the direction of its text (vert, see shapeTextVert;
+// null without text); "null" without one
 function drawingColorsJson(selected) {
 	var drawing = selected.length ? selected[0].drawing : null;
 	if (!drawing)
 		return "null";
 	var line = drawing.pen || (drawing.spPr && drawing.spPr.ln);
+	var bodyPr = drawing.getObjectType() === AscDFH.historyitem_type_Shape && drawing.getBodyPr ? drawing.getBodyPr() : null;
 	return JSON.stringify({
 		"fill": uniFillHex(drawing.brush || (drawing.spPr && drawing.spPr.Fill)),
-		"outline": line ? uniFillHex(line.Fill) : ""
+		"outline": line ? uniFillHex(line.Fill) : "",
+		"vert": bodyPr ? (bodyPr.vert != null ? bodyPr.vert : AscFormat.nVertTThorz) : null
 	});
+}
+
+// Shape properties with the direction of the text: 1 horizontal, 3 rotated down, 4 rotated up
+// (AscFormat.nVertTT*)
+function shapeTextVert(vert) {
+	var properties = new Asc.asc_CShapeProperty();
+	properties.asc_putVert(vert);
+	return properties;
 }
 
 // Pictures of choices (chart styles, table styles, slide layouts), drawn as pages with negative
@@ -1698,7 +1709,8 @@ window["eoStartEngine"] = function () {
 			state["interface"]["Italic"] = !!textPr.Italic;
 			state["interface"]["Underline"] = !!textPr.Underline;
 		}
-		state["modified"] = api.isDocumentModified();
+		// A new password (Document::SetPassword) is saved like a change
+		state["modified"] = api.isDocumentModified() || !!engine["passwordChanged"];
 		state["layoutPending"] = isLayoutPending();
 		state["currentPage"] = isPresentation ? logicDocument.CurPage : -1;
 		state["mobileView"] = !!mobileView;
@@ -1919,8 +1931,10 @@ window["eoStartEngine"] = function () {
 			logicDocument.Document_UpdateInterfaceState();
 		}
 		savedState = null;
-		if (success)
+		if (success) {
 			api.SetUnchangedDocument();
+			engine["passwordChanged"] = false;
+		}
 	};
 
 	// ---------------------------------------------------------------------------------
@@ -1955,6 +1969,7 @@ window["eoStartEngine"] = function () {
 			result["Color"] = hexOf(color);
 			result["Highlight"] = textPr.HighLight && textPr.HighLight !== -1 ? hexOf(textPr.HighLight) : "";
 		}
+		result["Rtl"] = !!(paraPr && paraPr.Bidi);
 		if (paraPr && paraPr.Spacing) {
 			result["LineRule"] = paraPr.Spacing.LineRule;
 			result["Line"] = paraPr.Spacing.Line;
@@ -2016,6 +2031,8 @@ window["eoStartEngine"] = function () {
 		api.put_LineSpacingBeforeAfter(0, before);
 		api.put_LineSpacingBeforeAfter(1, after);
 	};
+	// The paragraphs' direction: right to left (true) or left to right
+	engine["setRtl"] = function (rtl) { api.asc_setRtlTextDirection(rtl); };
 
 	// Text documents: paragraph styles
 	engine["getStyles"] = function () {
@@ -2651,14 +2668,19 @@ window["eoStartEngine"] = function () {
 		}
 	};
 
-	// Fill of the selected shapes: a color as "RRGGBB", or "" for none
+	// Fill of the selected shapes: a color (see ascColor), or "" for none
 	engine["setShapeFill"] = drawingCommand(function (hex) {
 		api.ShapeApply(shapeFill(hex));
 	});
 
-	// Outline of the selected shapes: a color as "RRGGBB" ("" for none) and a width in mm
+	// Outline of the selected shapes: a color (see ascColor; "" for none) and a width in mm
 	engine["setShapeOutline"] = drawingCommand(function (hex, width) {
 		api.ShapeApply(shapeOutline(hex, width));
+	});
+
+	// The direction of the selected shapes' text (see shapeTextVert)
+	engine["setTextVert"] = drawingCommand(function (vert) {
+		api.ShapeApply(shapeTextVert(vert));
 	});
 
 	// z-order of the selected drawings: 0 to front, 1 forward, 2 to back, 3 backward
@@ -3428,7 +3450,7 @@ function spreadsheetEngine(window, api) {
 			"layoutChanged": geometryChanged,
 			"layoutPending": false,
 			"currentPage": -1,
-			"modified": api.asc_isDocumentModified(),
+			"modified": api.asc_isDocumentModified() || !!engine["passwordChanged"],
 			"error": lastError,
 			"interface": {
 				"Bold": textPr ? !!textPr.Bold : !!font.getBold(),
@@ -3660,6 +3682,8 @@ function spreadsheetEngine(window, api) {
 			"wrap": !!xfs.asc_getWrapText(),
 			"merged": info.asc_getMerge() === Asc.c_oAscMergeOptions.Merge || info.asc_getMerge() === Asc.c_oAscMergeOptions.MergeCenter,
 			"verticalAlign": xfs.asc_getVertAlign(),
+			"angle": xfs.asc_getAngle() || 0,
+			"rtl": xfs.asc_getReadingOrder() === Asc.c_oReadingOrderTypes.RTL,
 			"border": hasBorder,
 			"fontName": textPr ? themeFontName(api.wbModel.theme, textPr.FontFamily ? textPr.FontFamily.Name : "") : xfs.asc_getFontName() || "",
 			"fontSize": textPr ? textPr.FontSize || 0 : xfs.asc_getFontSize() || 0,
@@ -3826,6 +3850,7 @@ function spreadsheetEngine(window, api) {
 
 	engine["setShapeFill"] = edit(function (hex) { applyShapeProperties(shapeFill(hex)); });
 	engine["setShapeOutline"] = edit(function (hex, width) { applyShapeProperties(shapeOutline(hex, width)); });
+	engine["setTextVert"] = edit(function (vert) { applyShapeProperties(shapeTextVert(vert)); });
 	// 0 to front, 1 forward, 2 to back, 3 backward (c_oAscDrawingLayerType)
 	engine["arrange"] = edit(function (level) { api.asc_setSelectedDrawingObjectLayer(level); });
 	engine["group"] = edit(function (group) {
@@ -3896,6 +3921,13 @@ function spreadsheetEngine(window, api) {
 		api.asc_setCellBorders(borders);
 	});
 	engine["setWrap"] = edit(function (value) { api.asc_setCellTextWrap(value); });
+	// The text's angle in degrees: 0 horizontal, 45 and -45 tilted up and down, 90 rotated up,
+	// -90 rotated down, 255 vertical (stacked letters)
+	engine["setTextAngle"] = edit(function (angle) { api.asc_setCellAngle(angle); });
+	// The cells' direction: right to left (true) or left to right
+	engine["setRtl"] = edit(function (rtl) {
+		api.asc_setCellReadingOrder(rtl ? Asc.c_oReadingOrderTypes.RTL : Asc.c_oReadingOrderTypes.LTR);
+	});
 	engine["setMerge"] = edit(function (value) {
 		api.asc_mergeCells(value ? Asc.c_oAscMergeOptions.Merge : Asc.c_oAscMergeOptions.None);
 	});
@@ -3967,7 +3999,9 @@ function spreadsheetEngine(window, api) {
 	// Saving (Document::Save)
 	engine["beforeSave"] = function () {};
 	engine["afterSave"] = function (success) {
-		if (success)
+		if (success) {
 			AscCommon.History.Reset_SavedIndex();
+			engine["passwordChanged"] = false;
+		}
 	};
 }

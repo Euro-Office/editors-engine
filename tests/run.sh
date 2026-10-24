@@ -6,7 +6,8 @@
 #
 # A test names its document (relative to the MobileEditors root, or $OUT_DIR/<file> for a file an
 # earlier test saved) in a "// document:" line. With a "// save:" line the document is saved after the test and opened again for <test>.reopen.js.
-# A "// env:" line sets eo-render's environment for both (EO_LANGUAGE=ru EO_ENCODING=46 ...).
+# A "// env:" line sets eo-render's environment for both (EO_LANGUAGE=ru EO_ENCODING=46 ...), a
+# "// reopen env:" line the reopened file's instead.
 # Output files go to $OUT_DIR (build/work/engine-tests).
 set -u
 
@@ -58,6 +59,9 @@ for test in "$@"; do
         rm -f "$OUT_DIR/$save"
         check "$name" "$test" "$document" "$OUT_DIR/$save"
         reopen="$TESTS_DIR/$name.reopen.js"
+        # A "// reopen env:" line sets the environment of the reopened file's test instead
+        reopen_env=$(sed -n 's#^// reopen env: ##p' "$test")
+        [ -n "$reopen_env" ] && test_env=$reopen_env
         [ -f "$reopen" ] && check "$name.reopen" "$reopen" "$OUT_DIR/$save"
     else
         check "$name" "$test" "$document"
