@@ -2246,6 +2246,16 @@ window["eoStartEngine"] = function () {
 			var num = numId !== null ? logicDocument.GetNumbering().GetNum(numId) : null;
 			var level = num ? num.GetLvl(paraPr && paraPr.NumPr && paraPr.NumPr.Lvl ? paraPr.NumPr.Lvl : 0) : null;
 			result["List"] = level ? (level.IsBulleted() ? 0 : 1) : -1;
+			// The advanced settings (setParagraphOption, setFirstLineIndent)
+			if (paraPr) {
+				result["ContextualSpacing"] = !!paraPr.ContextualSpacing;
+				result["PageBreakBefore"] = !!paraPr.PageBreakBefore;
+				result["WidowControl"] = !!paraPr.WidowControl;
+				result["KeepLines"] = !!paraPr.KeepLines;
+				result["KeepNext"] = !!paraPr.KeepNext;
+				result["SuppressLineNumbers"] = !!paraPr.SuppressLineNumbers;
+				result["FirstLine"] = paraPr.Ind && paraPr.Ind.FirstLine ? paraPr.Ind.FirstLine : 0;
+			}
 			var styles = logicDocument.Get_Styles();
 			var styleId = paraPr && paraPr.PStyle ? paraPr.PStyle : styles.Get_Default_Paragraph();
 			var style = styleId && styles.Get(styleId);
@@ -2366,6 +2376,38 @@ window["eoStartEngine"] = function () {
 	engine["setParagraphSpacing"] = function (before, after) {
 		api.put_LineSpacingBeforeAfter(0, before);
 		api.put_LineSpacingBeforeAfter(1, after);
+	};
+	// Text documents: the paragraphs' advanced settings, as web-apps sets them: "contextualSpacing"
+	// (no space between paragraphs of the same style), "pageBreakBefore", "widowControl"
+	// (orphan control), "keepLines", "keepNext", "suppressLineNumbers"; the first line's indent (mm)
+	var paragraphOptions = {
+		"pageBreakBefore": "put_PageBreakBefore", "widowControl": "put_WidowControl", "keepLines": "put_KeepLines",
+		"keepNext": "put_KeepNext"
+	};
+	// Paragraph properties that change only what is put into them (their constructor turns
+	// line numbers' suppression off, which paraApply would apply)
+	function paragraphProperties() {
+		var properties = new Asc.asc_CParagraphProperty();
+		properties.SuppressLineNumbers = undefined;
+		return properties;
+	}
+	engine["setParagraphOption"] = function (name, value) {
+		if (name === "contextualSpacing") {
+			api.put_AddSpaceBetweenPrg(value);
+			return;
+		}
+		if (name === "suppressLineNumbers") {
+			api.asc_SetParagraphSuppressLineNumbers(value);
+			return;
+		}
+		var properties = paragraphProperties();
+		properties[paragraphOptions[name]](value);
+		api.paraApply(properties);
+	};
+	engine["setFirstLineIndent"] = function (mm) {
+		var properties = paragraphProperties();
+		properties.get_Ind().put_FirstLine(mm);
+		api.paraApply(properties);
 	};
 	// The paragraphs' direction: right to left (true) or left to right
 	engine["setRtl"] = function (rtl) { api.asc_setRtlTextDirection(rtl); };
