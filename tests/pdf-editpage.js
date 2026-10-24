@@ -50,7 +50,7 @@ t.run("keeps its pictures as files", function () {
 	});
 	t.ok("pictures", images.length > 0);
 	t.ok("none as data", images.every(function (image) { return String(image).indexOf("data:") !== 0; }));
-	t.ok("files to write", window.eoPdfImages === true);
+	t.ok("files to write", window.eoImages === true);
 });
 
 t.run("undoes and redoes it", function () {

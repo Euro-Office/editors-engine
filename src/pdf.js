@@ -315,26 +315,14 @@ function installedFont(name) {
 
 // Their pictures come as data URLs, which the web editor gives the server to store with the
 // document (sendImgUrls). Here they become files of the images directory, as the app's
-// pictures are: the engine writes them after the command (eoEngine.takeImage, see
-// Document::Execute) under the names given now, each one a file of its own: core's PDF writer
-// draws a picture used twice once. (Core's graphics draw data URLs through one file, so all
-// pictures would show the first one.)
-var pendingImages = [];
-var imageCount = 0;
-function imageFile(url) {
-	var type = /^data:image\/(png|jpeg|gif|bmp)/.exec(url);
-	var name = "scan-" + Date.now().toString(36) + "-" + (++imageCount) + "." + (type ? type[1].replace("jpeg", "jpg") : "png");
-	pendingImages.push({ name: name, data: url.substring(url.indexOf(",") + 1) });
-	window["eoPdfImages"] = true;
-	return name;
-}
+// pictures are (see engine.js' imageFile): core's PDF writer draws a picture used twice once.
 (function () {
 	var sendImgUrls = AscCommon.sendImgUrls;
 	AscCommon.sendImgUrls = function (api, images, callback) {
 		var isData = function (url) { return typeof url === "string" && url.indexOf("data:") === 0; };
 		if (!images.length || !images.every(isData))
 			return sendImgUrls.apply(this, arguments);
-		var names = images.map(imageFile);
+		var names = images.map(function (url) { return imageFile(url); });
 		// As sdkjs' native path gives them (ResetNewUrls takes the name from the path)
 		function finish(uploaded) {
 			callback(uploaded.map(function (name) { return { "url": name, "path": "media/" + name }; }));
@@ -1414,11 +1402,7 @@ function pdfEngine(api) {
 		allPagesChanged();
 	};
 
-	engine["takeImage"] = function () {
-		var image = pendingImages.shift();
-		window["eoPdfImages"] = pendingImages.length > 0;
-		return image ? image.name + "\n" + image.data : "";
-	};
+	engine["takeImage"] = takeImage;
 
 	// ---------------------------------------------------------------------------------
 	// Contents, links, text

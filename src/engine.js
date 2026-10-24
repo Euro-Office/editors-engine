@@ -205,6 +205,64 @@ function preloadImage(api, name, width, height) {
 	api.ImageLoader.map_image_index[name] = image;
 }
 
+// Pictures sdkjs has as data URLs become files of the images directory: the engine writes them
+// after the command (eoEngine.takeImage, see Document::Execute and RenderTile) under the names
+// given now, each one a file of its own. (Core's graphics draw data URLs through one file,
+// which its renderer keeps by its path, so all of them would show the first one.)
+var pendingImages = [];
+var imageCount = 0;
+function imageFile(url, prefix) {
+	var type = /^data:image\/(png|jpeg|gif|bmp)/.exec(url);
+	var name = (prefix || "scan") + "-" + Date.now().toString(36) + "-" + (++imageCount) + "." + (type ? type[1].replace("jpeg", "jpg") : "png");
+	pendingImages.push({ name: name, data: url.substring(url.indexOf(",") + 1) });
+	window["eoImages"] = true;
+	return name;
+}
+function takeImage() {
+	var image = pendingImages.shift();
+	window["eoImages"] = pendingImages.length > 0;
+	return image ? image.name + "\n" + image.data : "";
+}
+
+// Textures given as data URLs (sdkjs' texture presets; patterns as "data:onlyoffice_hatch,"
+// and their pixels, RGBA): a file each, by imageFile. A pattern becomes a BMP.
+(function (graphics) {
+	var putTexture = graphics.put_brushTexture;
+	var files = {};
+	function bmpOfHatch(base64) {
+		var rgba = AscCommon.Base64.decode(base64);
+		var size = Math.round(Math.sqrt(rgba.length / 4));
+		var header = 54, length = header + rgba.length;
+		var bmp = new Uint8Array(length);
+		function put32(offset, value) {
+			for (var i = 0; i < 4; i++)
+				bmp[offset + i] = (value >>> (8 * i)) & 0xFF;
+		}
+		bmp[0] = 0x42; bmp[1] = 0x4D;
+		put32(2, length); put32(10, header); put32(14, 40);
+		put32(18, size); put32(22, -size); // rows from the top
+		bmp[26] = 1; bmp[28] = 32;
+		put32(34, rgba.length);
+		for (var p = 0; p < rgba.length; p += 4) {
+			bmp[header + p] = rgba[p + 2];
+			bmp[header + p + 1] = rgba[p + 1];
+			bmp[header + p + 2] = rgba[p];
+			bmp[header + p + 3] = rgba[p + 3];
+		}
+		return "data:image/bmp;base64," + AscCommon.Base64.encode(bmp);
+	}
+	graphics.put_brushTexture = function (src, mode) {
+		if (typeof src === "string" && src.indexOf("data:") === 0) {
+			if (!files[src]) {
+				var hatch = src.indexOf("data:onlyoffice_hatch,") === 0;
+				files[src] = imageFile(hatch ? bmpOfHatch(src.substring(src.indexOf(",") + 1)) : src, hatch ? "pattern" : "texture");
+			}
+			src = files[src];
+		}
+		return putTexture.call(this, src, mode);
+	};
+})(AscCommon.CNativeGraphics.prototype);
+
 // Hit testing of shapes and pictures. sdkjs builds a shape's outline on a canvas and asks
 // isPointInPath; native.js's canvas always answers no, so nothing can be tapped. This context
 // records the path (curves as line segments) and answers with the nonzero winding rule.
@@ -335,6 +393,193 @@ function shapeTextVert(vert) {
 	var properties = new Asc.asc_CShapeProperty();
 	properties.asc_putVert(vert);
 	return properties;
+}
+
+// Fills of shapes and slide backgrounds, as JSON:
+//   {type: "none"}, {type: "solid", color},
+//   {type: "gradient", radial, angle (degrees, linear ones), stops: [{color, position (0 to 100)}]},
+//   {type: "pattern", pattern (index in getFillResources' patterns), foreground, background},
+//   {type: "texture", texture (index in its textures)},
+//   {type: "picture", picture (a file the app copied into the images directory; none keeps the
+//    shape's), width, height (its size in pixels), tile}
+// Colors as in ascColor; in what getFill reports "RRGGBB".
+function ascFill(api, fill) {
+	var result = new Asc.asc_CShapeFill();
+	switch (fill["type"]) {
+	case "solid":
+		return shapeFill(fill["color"]).asc_getFill();
+	case "gradient":
+		var gradient = new Asc.asc_CFillGrad();
+		var stops = fill["stops"];
+		gradient.asc_putColors(stops.map(function (stop) { return ascColor(stop["color"]); }));
+		gradient.asc_putPositions(stops.map(function (stop) { return Math.round(stop["position"] * 1000); }));
+		if (fill["radial"]) {
+			gradient.asc_putGradType(Asc.c_oAscFillGradType.GRAD_PATH);
+			gradient.asc_putPathType(0);
+		} else {
+			gradient.asc_putGradType(Asc.c_oAscFillGradType.GRAD_LINEAR);
+			gradient.asc_putLinearAngle(Math.round((fill["angle"] || 0) * 60000));
+			gradient.asc_putLinearScale(true);
+		}
+		result.asc_putType(Asc.c_oAscFill.FILL_TYPE_GRAD);
+		result.asc_putFill(gradient);
+		return result;
+	case "pattern":
+		var pattern = new Asc.asc_CFillHatch();
+		pattern.asc_putPatternType(fill["pattern"]);
+		pattern.asc_putColorFg(ascColor(fill["foreground"]));
+		pattern.asc_putColorBg(ascColor(fill["background"]));
+		result.asc_putType(Asc.c_oAscFill.FILL_TYPE_PATT);
+		result.asc_putFill(pattern);
+		return result;
+	case "texture":
+	case "picture":
+		var picture = new Asc.asc_CFillBlip();
+		if (fill["type"] === "texture") {
+			picture.asc_putTextureId(fill["texture"]);
+			picture.setType(Asc.c_oAscFillBlipType.TILE);
+		} else {
+			// Without a picture, the shape's stays: only stretched or tiled changes
+			if (fill["picture"]) {
+				preloadImage(api, fill["picture"], fill["width"], fill["height"]);
+				picture.asc_putUrl(fill["picture"]);
+			}
+			picture.setType(fill["tile"] ? Asc.c_oAscFillBlipType.TILE : Asc.c_oAscFillBlipType.STRETCH);
+		}
+		result.asc_putType(Asc.c_oAscFill.FILL_TYPE_BLIP);
+		result.asc_putFill(picture);
+		return result;
+	default:
+		return shapeFill("").asc_getFill();
+	}
+}
+
+// A fill (sdkjs' CUniFill, its colors calculated) as ascFill's JSON
+function fillJson(fill) {
+	if (!fill || !fill.fill || fill.isNoFill())
+		return { "type": "none" };
+	var f = fill.fill;
+	function hex(color) {
+		var rgba = color && (color.getRGBAColor ? color.getRGBAColor() : color.RGBA);
+		return rgba ? hexOfRgb(rgba.R, rgba.G, rgba.B) : "000000";
+	}
+	switch (f.type) {
+	case Asc.c_oAscFill.FILL_TYPE_SOLID:
+		return { "type": "solid", "color": uniFillHex(fill) };
+	case Asc.c_oAscFill.FILL_TYPE_GRAD:
+		return {
+			"type": "gradient", "radial": !!f.path, "angle": f.lin ? f.lin.angle / 60000 : 0,
+			"stops": f.colors.map(function (stop) { return { "color": hex(stop.color), "position": stop.pos / 1000 }; })
+		};
+	case Asc.c_oAscFill.FILL_TYPE_PATT:
+		return { "type": "pattern", "pattern": f.ftype, "foreground": hex(f.fgClr), "background": hex(f.bgClr) };
+	case Asc.c_oAscFill.FILL_TYPE_BLIP:
+		var texture = AscCommon.g_oUserTexturePresets.indexOf(f.RasterImageId);
+		return texture >= 0 ? { "type": "texture", "texture": texture } : { "type": "picture", "tile": !!f.tile };
+	default:
+		return { "type": "none" };
+	}
+}
+
+// What fills are made of: the patterns, each 8 x 8 pixels as "0" (foreground) and "1"
+// (background) by rows, and the textures as data URLs (PNG)
+function fillResourcesJson() {
+	var patterns = [];
+	AscCommon.global_hatch_names.forEach(function (name) {
+		// sdkjs' brush of the pattern in black on white: its pixels (RGBA)
+		var data = AscCommon.GetHatchBrush(name, 0, 0, 0, 255, 255, 255, 255, 255).Data;
+		var bits = "";
+		for (var i = 0; i < data.length; i += 4)
+			bits += data[i] === 0 ? "0" : "1";
+		patterns[AscCommon.global_hatch_offsets[name]] = bits;
+	});
+	return JSON.stringify({ "patterns": patterns, "textures": AscCommon.g_oUserTexturePresets });
+}
+
+// List presets as web-apps offers them (apps/*/mobile textSettings): documents apply the
+// numbering (put_ListTypeCustom), presentations a type and subtype (put_ListType); "bullet" is
+// the preview's numbering
+var DOCUMENT_LIST_PRESETS = {
+	"bullets": [
+		"{\"Type\":\"bullet\",\"Lvl\":[{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"bullet\"},\"lvlText\":\"·\",\"rPr\":{\"rFonts\":{\"ascii\":\"Symbol\",\"cs\":\"Symbol\",\"eastAsia\":\"Symbol\",\"hAnsi\":\"Symbol\"}}}]}",
+		"{\"Type\":\"bullet\",\"Lvl\":[{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"bullet\"},\"lvlText\":\"o\",\"rPr\":{\"rFonts\":{\"ascii\":\"Courier New\",\"cs\":\"Courier New\",\"eastAsia\":\"Courier New\",\"hAnsi\":\"Courier New\"}}}]}",
+		"{\"Type\":\"bullet\",\"Lvl\":[{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"bullet\"},\"lvlText\":\"§\",\"rPr\":{\"rFonts\":{\"ascii\":\"Wingdings\",\"cs\":\"Wingdings\",\"eastAsia\":\"Wingdings\",\"hAnsi\":\"Wingdings\"}}}]}",
+		"{\"Type\":\"bullet\",\"Lvl\":[{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"bullet\"},\"lvlText\":\"v\",\"rPr\":{\"rFonts\":{\"ascii\":\"Wingdings\",\"cs\":\"Wingdings\",\"eastAsia\":\"Wingdings\",\"hAnsi\":\"Wingdings\"}}}]}",
+		"{\"Type\":\"bullet\",\"Lvl\":[{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"bullet\"},\"lvlText\":\"Ø\",\"rPr\":{\"rFonts\":{\"ascii\":\"Wingdings\",\"cs\":\"Wingdings\",\"eastAsia\":\"Wingdings\",\"hAnsi\":\"Wingdings\"}}}]}",
+		"{\"Type\":\"bullet\",\"Lvl\":[{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"bullet\"},\"lvlText\":\"ü\",\"rPr\":{\"rFonts\":{\"ascii\":\"Wingdings\",\"cs\":\"Wingdings\",\"eastAsia\":\"Wingdings\",\"hAnsi\":\"Wingdings\"}}}]}",
+		"{\"Type\":\"bullet\",\"Lvl\":[{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"bullet\"},\"lvlText\":\"¨\",\"rPr\":{\"rFonts\":{\"ascii\":\"Symbol\",\"cs\":\"Symbol\",\"eastAsia\":\"Symbol\",\"hAnsi\":\"Symbol\"}}}]}"
+	],
+	"numbers": [
+		"{\"Type\":\"number\",\"Lvl\":[{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"upperLetter\"},\"lvlText\":\"%1.\"}]}",
+		"{\"Type\":\"number\",\"Lvl\":[{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"lowerLetter\"},\"lvlText\":\"%1)\"}]}",
+		"{\"Type\":\"number\",\"Lvl\":[{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"lowerLetter\"},\"lvlText\":\"%1.\"}]}",
+		"{\"Type\":\"number\",\"Lvl\":[{\"lvlJc\":\"right\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"decimal\"},\"lvlText\":\"%1.\"}]}",
+		"{\"Type\":\"number\",\"Lvl\":[{\"lvlJc\":\"right\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"decimal\"},\"lvlText\":\"%1)\"}]}",
+		"{\"Type\":\"number\",\"Lvl\":[{\"lvlJc\":\"right\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"upperRoman\"},\"lvlText\":\"%1.\"}]}",
+		"{\"Type\":\"number\",\"Lvl\":[{\"lvlJc\":\"right\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"lowerRoman\"},\"lvlText\":\"%1.\"}]}"
+	],
+	"multilevel": [
+		"{\"Type\":\"number\",\"Lvl\":[{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"decimal\"},\"lvlText\":\"%1)\",\"pPr\":{\"ind\":{\"left\":360,\"firstLine\":-360}}},{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"lowerLetter\"},\"lvlText\":\"%2)\",\"pPr\":{\"ind\":{\"left\":720,\"firstLine\":-360}}},{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"lowerRoman\"},\"lvlText\":\"%3)\",\"pPr\":{\"ind\":{\"left\":1080,\"firstLine\":-360}}},{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"decimal\"},\"lvlText\":\"%4)\",\"pPr\":{\"ind\":{\"left\":1440,\"firstLine\":-360}}},{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"lowerLetter\"},\"lvlText\":\"%5)\",\"pPr\":{\"ind\":{\"left\":1800,\"firstLine\":-360}}},{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"lowerRoman\"},\"lvlText\":\"%6)\",\"pPr\":{\"ind\":{\"left\":2160,\"firstLine\":-360}}},{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"decimal\"},\"lvlText\":\"%7)\",\"pPr\":{\"ind\":{\"left\":2520,\"firstLine\":-360}}},{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"lowerLetter\"},\"lvlText\":\"%8)\",\"pPr\":{\"ind\":{\"left\":2880,\"firstLine\":-360}}},{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"lowerRoman\"},\"lvlText\":\"%9)\",\"pPr\":{\"ind\":{\"left\":3240,\"firstLine\":-360}}}]}",
+		"{\"Type\":\"number\",\"Lvl\":[{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"decimal\"},\"lvlText\":\"%1.\",\"pPr\":{\"ind\":{\"left\":360,\"firstLine\":-360}}},{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"decimal\"},\"lvlText\":\"%1.%2.\",\"pPr\":{\"ind\":{\"left\":792,\"firstLine\":-432}}},{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"decimal\"},\"lvlText\":\"%1.%2.%3.\",\"pPr\":{\"ind\":{\"left\":1224,\"firstLine\":-504}}},{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"decimal\"},\"lvlText\":\"%1.%2.%3.%4.\",\"pPr\":{\"ind\":{\"left\":1728,\"firstLine\":-648}}},{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"decimal\"},\"lvlText\":\"%1.%2.%3.%4.%5.\",\"pPr\":{\"ind\":{\"left\":2232,\"firstLine\":-792}}},{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"decimal\"},\"lvlText\":\"%1.%2.%3.%4.%5.%6.\",\"pPr\":{\"ind\":{\"left\":2736,\"firstLine\":-936}}},{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"decimal\"},\"lvlText\":\"%1.%2.%3.%4.%5.%6.%7.\",\"pPr\":{\"ind\":{\"left\":3240,\"firstLine\":-1080}}},{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"decimal\"},\"lvlText\":\"%1.%2.%3.%4.%5.%6.%7.%8.\",\"pPr\":{\"ind\":{\"left\":3744,\"firstLine\":-1224}}},{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"decimal\"},\"lvlText\":\"%1.%2.%3.%4.%5.%6.%7.%8.%9.\",\"pPr\":{\"ind\":{\"left\":4320,\"firstLine\":-1440}}}]}",
+		"{\"Type\":\"bullet\",\"Lvl\":[{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"bullet\"},\"lvlText\":\"v\",\"pPr\":{\"ind\":{\"left\":360,\"firstLine\":-360}},\"rPr\":{\"rFonts\":{\"ascii\":\"Wingdings\",\"cs\":\"Wingdings\",\"eastAsia\":\"Wingdings\",\"hAnsi\":\"Wingdings\"}}},{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"bullet\"},\"lvlText\":\"Ø\",\"pPr\":{\"ind\":{\"left\":720,\"firstLine\":-360}},\"rPr\":{\"rFonts\":{\"ascii\":\"Wingdings\",\"cs\":\"Wingdings\",\"eastAsia\":\"Wingdings\",\"hAnsi\":\"Wingdings\"}}},{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"bullet\"},\"lvlText\":\"§\",\"pPr\":{\"ind\":{\"left\":1080,\"firstLine\":-360}},\"rPr\":{\"rFonts\":{\"ascii\":\"Wingdings\",\"cs\":\"Wingdings\",\"eastAsia\":\"Wingdings\",\"hAnsi\":\"Wingdings\"}}},{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"bullet\"},\"lvlText\":\"·\",\"pPr\":{\"ind\":{\"left\":1440,\"firstLine\":-360}},\"rPr\":{\"rFonts\":{\"ascii\":\"Symbol\",\"cs\":\"Symbol\",\"eastAsia\":\"Symbol\",\"hAnsi\":\"Symbol\"}}},{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"bullet\"},\"lvlText\":\"¨\",\"pPr\":{\"ind\":{\"left\":1800,\"firstLine\":-360}},\"rPr\":{\"rFonts\":{\"ascii\":\"Symbol\",\"cs\":\"Symbol\",\"eastAsia\":\"Symbol\",\"hAnsi\":\"Symbol\"}}},{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"bullet\"},\"lvlText\":\"Ø\",\"pPr\":{\"ind\":{\"left\":2160,\"firstLine\":-360}},\"rPr\":{\"rFonts\":{\"ascii\":\"Wingdings\",\"cs\":\"Wingdings\",\"eastAsia\":\"Wingdings\",\"hAnsi\":\"Wingdings\"}}},{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"bullet\"},\"lvlText\":\"§\",\"pPr\":{\"ind\":{\"left\":2520,\"firstLine\":-360}},\"rPr\":{\"rFonts\":{\"ascii\":\"Wingdings\",\"cs\":\"Wingdings\",\"eastAsia\":\"Wingdings\",\"hAnsi\":\"Wingdings\"}}},{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"bullet\"},\"lvlText\":\"·\",\"pPr\":{\"ind\":{\"left\":2880,\"firstLine\":-360}},\"rPr\":{\"rFonts\":{\"ascii\":\"Symbol\",\"cs\":\"Symbol\",\"eastAsia\":\"Symbol\",\"hAnsi\":\"Symbol\"}}},{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"bullet\"},\"lvlText\":\"¨\",\"pPr\":{\"ind\":{\"left\":3240,\"firstLine\":-360}},\"rPr\":{\"rFonts\":{\"ascii\":\"Symbol\",\"cs\":\"Symbol\",\"eastAsia\":\"Symbol\",\"hAnsi\":\"Symbol\"}}}]}",
+		"{\"Type\":\"number\",\"Headings\":\"true\",\"Lvl\":[{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"upperRoman\"},\"lvlText\":\"Article %1.\",\"pPr\":{\"ind\":{\"left\":0,\"firstLine\":0}}},{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"decimalZero\"},\"lvlText\":\"Section %1.%2\",\"pPr\":{\"ind\":{\"left\":0,\"firstLine\":0}}},{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"lowerLetter\"},\"lvlText\":\"(%3)\",\"pPr\":{\"ind\":{\"left\":720,\"firstLine\":-432}}},{\"lvlJc\":\"right\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"lowerRoman\"},\"lvlText\":\"(%4)\",\"pPr\":{\"ind\":{\"left\":864,\"firstLine\":-144}}},{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"decimal\"},\"lvlText\":\"%5)\",\"pPr\":{\"ind\":{\"left\":1008,\"firstLine\":-432}}},{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"lowerLetter\"},\"lvlText\":\"%6)\",\"pPr\":{\"ind\":{\"left\":1152,\"firstLine\":-432}}},{\"lvlJc\":\"right\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"lowerRoman\"},\"lvlText\":\"%7)\",\"pPr\":{\"ind\":{\"left\":1296,\"firstLine\":-288}}},{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"lowerLetter\"},\"lvlText\":\"%8.\",\"pPr\":{\"ind\":{\"left\":1440,\"firstLine\":-432}}},{\"lvlJc\":\"right\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"lowerRoman\"},\"lvlText\":\"%9.\",\"pPr\":{\"ind\":{\"left\":1584,\"firstLine\":-144}}}]}",
+		"{\"Type\":\"number\",\"Headings\":\"true\",\"Lvl\":[{\"lvlJc\":\"left\",\"suff\":\"space\",\"numFmt\":{\"val\":\"decimal\"},\"lvlText\":\"Chapter %1\",\"pPr\":{\"ind\":{\"left\":0,\"firstLine\":0}}},{\"lvlJc\":\"left\",\"suff\":\"nothing\",\"numFmt\":{\"val\":\"none\"},\"lvlText\":\"\",\"pPr\":{\"ind\":{\"left\":0,\"firstLine\":0}}},{\"lvlJc\":\"left\",\"suff\":\"nothing\",\"numFmt\":{\"val\":\"none\"},\"lvlText\":\"\",\"pPr\":{\"ind\":{\"left\":0,\"firstLine\":0}}},{\"lvlJc\":\"left\",\"suff\":\"nothing\",\"numFmt\":{\"val\":\"none\"},\"lvlText\":\"\",\"pPr\":{\"ind\":{\"left\":0,\"firstLine\":0}}},{\"lvlJc\":\"left\",\"suff\":\"nothing\",\"numFmt\":{\"val\":\"none\"},\"lvlText\":\"\",\"pPr\":{\"ind\":{\"left\":0,\"firstLine\":0}}},{\"lvlJc\":\"left\",\"suff\":\"nothing\",\"numFmt\":{\"val\":\"none\"},\"lvlText\":\"\",\"pPr\":{\"ind\":{\"left\":0,\"firstLine\":0}}},{\"lvlJc\":\"left\",\"suff\":\"nothing\",\"numFmt\":{\"val\":\"none\"},\"lvlText\":\"\",\"pPr\":{\"ind\":{\"left\":0,\"firstLine\":0}}},{\"lvlJc\":\"left\",\"suff\":\"nothing\",\"numFmt\":{\"val\":\"none\"},\"lvlText\":\"\",\"pPr\":{\"ind\":{\"left\":0,\"firstLine\":0}}},{\"lvlJc\":\"left\",\"suff\":\"nothing\",\"numFmt\":{\"val\":\"none\"},\"lvlText\":\"\",\"pPr\":{\"ind\":{\"left\":0,\"firstLine\":0}}}]}",
+		"{\"Type\":\"number\",\"Headings\":\"true\",\"Lvl\":[{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"upperRoman\"},\"lvlText\":\"%1.\",\"pPr\":{\"ind\":{\"left\":0,\"firstLine\":0}}},{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"upperLetter\"},\"lvlText\":\"%2.\",\"pPr\":{\"ind\":{\"left\":720,\"firstLine\":0}}},{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"decimal\"},\"lvlText\":\"%3.\",\"pPr\":{\"ind\":{\"left\":1440,\"firstLine\":0}}},{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"lowerLetter\"},\"lvlText\":\"%4)\",\"pPr\":{\"ind\":{\"left\":2160,\"firstLine\":0}}},{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"decimal\"},\"lvlText\":\"(%5)\",\"pPr\":{\"ind\":{\"left\":2880,\"firstLine\":0}}},{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"lowerLetter\"},\"lvlText\":\"(%6)\",\"pPr\":{\"ind\":{\"left\":3600,\"firstLine\":0}}},{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"lowerRoman\"},\"lvlText\":\"(%7)\",\"pPr\":{\"ind\":{\"left\":4320,\"firstLine\":0}}},{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"lowerLetter\"},\"lvlText\":\"(%8)\",\"pPr\":{\"ind\":{\"left\":5040,\"firstLine\":0}}},{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"lowerRoman\"},\"lvlText\":\"(%9)\",\"pPr\":{\"ind\":{\"left\":5760,\"firstLine\":0}}}]}",
+		"{\"Type\":\"number\",\"Headings\":\"true\",\"Lvl\":[{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"decimal\"},\"lvlText\":\"%1.\",\"pPr\":{\"ind\":{\"left\":432,\"firstLine\":-432}}},{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"decimal\"},\"lvlText\":\"%1.%2.\",\"pPr\":{\"ind\":{\"left\":576,\"firstLine\":-576}}},{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"decimal\"},\"lvlText\":\"%1.%2.%3.\",\"pPr\":{\"ind\":{\"left\":720,\"firstLine\":-720}}},{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"decimal\"},\"lvlText\":\"%1.%2.%3.%4.\",\"pPr\":{\"ind\":{\"left\":864,\"firstLine\":-864}}},{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"decimal\"},\"lvlText\":\"%1.%2.%3.%4.%5.\",\"pPr\":{\"ind\":{\"left\":1008,\"firstLine\":-1008}}},{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"decimal\"},\"lvlText\":\"%1.%2.%3.%4.%5.%6.\",\"pPr\":{\"ind\":{\"left\":1152,\"firstLine\":-1152}}},{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"decimal\"},\"lvlText\":\"%1.%2.%3.%4.%5.%6.%7.\",\"pPr\":{\"ind\":{\"left\":1296,\"firstLine\":-1296}}},{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"decimal\"},\"lvlText\":\"%1.%2.%3.%4.%5.%6.%7.%8.\",\"pPr\":{\"ind\":{\"left\":1440,\"firstLine\":-1440}}},{\"lvlJc\":\"left\",\"suff\":\"tab\",\"numFmt\":{\"val\":\"decimal\"},\"lvlText\":\"%1.%2.%3.%4.%5.%6.%7.%8.%9.\",\"pPr\":{\"ind\":{\"left\":1584,\"firstLine\":-1584}}}]}"
+	]
+};
+var PRESENTATION_LIST_PRESETS = {
+	"bullets": [
+		{ "subtype": 1, "bullet": "{\"bulletTypeface\":{\"type\":\"bufont\",\"typeface\":\"Symbol\"},\"bulletType\":{\"type\":\"char\",\"char\":\"·\",\"startAt\":null}}" },
+		{ "subtype": 2, "bullet": "{\"bulletTypeface\":{\"type\":\"bufont\",\"typeface\":\"Courier New\"},\"bulletType\":{\"type\":\"char\",\"char\":\"o\",\"startAt\":null}}" },
+		{ "subtype": 3, "bullet": "{\"bulletTypeface\":{\"type\":\"bufont\",\"typeface\":\"Wingdings\"},\"bulletType\":{\"type\":\"char\",\"char\":\"§\",\"startAt\":null}}" },
+		{ "subtype": 4, "bullet": "{\"bulletTypeface\":{\"type\":\"bufont\",\"typeface\":\"Wingdings\"},\"bulletType\":{\"type\":\"char\",\"char\":\"v\",\"startAt\":null}}" },
+		{ "subtype": 5, "bullet": "{\"bulletTypeface\":{\"type\":\"bufont\",\"typeface\":\"Wingdings\"},\"bulletType\":{\"type\":\"char\",\"char\":\"Ø\",\"startAt\":null}}" },
+		{ "subtype": 6, "bullet": "{\"bulletTypeface\":{\"type\":\"bufont\",\"typeface\":\"Wingdings\"},\"bulletType\":{\"type\":\"char\",\"char\":\"ü\",\"startAt\":null}}" },
+		{ "subtype": 7, "bullet": "{\"bulletTypeface\":{\"type\":\"bufont\",\"typeface\":\"Symbol\"},\"bulletType\":{\"type\":\"char\",\"char\":\"¨\",\"startAt\":null}}" }
+	],
+	"numbers": [
+		{ "subtype": 4, "bullet": "{\"bulletTypeface\":{\"type\":\"bufont\",\"typeface\":\"Arial\"},\"bulletType\":{\"type\":\"autonum\",\"char\":null,\"autoNumType\":\"alphaUcPeriod\",\"startAt\":null}}" },
+		{ "subtype": 5, "bullet": "{\"bulletTypeface\":{\"type\":\"bufont\",\"typeface\":\"Arial\"},\"bulletType\":{\"type\":\"autonum\",\"char\":null,\"autoNumType\":\"alphaLcParenR\",\"startAt\":null}}" },
+		{ "subtype": 6, "bullet": "{\"bulletTypeface\":{\"type\":\"bufont\",\"typeface\":\"Arial\"},\"bulletType\":{\"type\":\"autonum\",\"char\":null,\"autoNumType\":\"alphaLcPeriod\",\"startAt\":null}}" },
+		{ "subtype": 1, "bullet": "{\"bulletTypeface\":{\"type\":\"bufont\",\"typeface\":\"Arial\"},\"bulletType\":{\"type\":\"autonum\",\"char\":null,\"autoNumType\":\"arabicPeriod\",\"startAt\":null}}" },
+		{ "subtype": 2, "bullet": "{\"bulletTypeface\":{\"type\":\"bufont\",\"typeface\":\"Arial\"},\"bulletType\":{\"type\":\"autonum\",\"char\":null,\"autoNumType\":\"arabicParenR\",\"startAt\":null}}" },
+		{ "subtype": 3, "bullet": "{\"bulletTypeface\":{\"type\":\"bufont\",\"typeface\":\"Arial\"},\"bulletType\":{\"type\":\"autonum\",\"char\":null,\"autoNumType\":\"romanUcPeriod\",\"startAt\":null}}" },
+		{ "subtype": 7, "bullet": "{\"bulletTypeface\":{\"type\":\"bufont\",\"typeface\":\"Arial\"},\"bulletType\":{\"type\":\"autonum\",\"char\":null,\"autoNumType\":\"romanLcPeriod\",\"startAt\":null}}" }
+	]
+};
+
+// The size of the pictures of list presets (mm)
+var LIST_PREVIEW_SIZE = 20;
+
+// Draws a list preset's picture (numbering info as sdkjs' preview takes it; type 0 bullets, 1
+// numbers, 2 multilevel) with sdkjs' bullet preview drawer, given the tile's graphics instead
+// of a canvas of the web page
+function drawListPreview(api, info, type, g, size) {
+	var drawingInfo = api.ParseBulletPreviewInformation(api.CheckDeprecatedBulletPreviewInfo([{ "numberingInfo": info, "divId": "eo" }], type));
+	var drawer = new AscCommon.CBulletPreviewDrawer(drawingInfo, type);
+	var pixels = size / AscCommon.g_dKoef_pix_to_mm;
+	var canvas = {
+		clientWidth: pixels, clientHeight: pixels, width: pixels, height: pixels,
+		getContext: function () { return { beginPath: function () {} }; }
+	};
+	drawer.getCanvas = function () { return canvas; };
+	drawer.getGraphics = function () { return g; };
+	// The drawer moves the canvas' coordinates (pixels) to a paragraph's place: a transform here
+	drawer.drawParagraph = function (graphics, paragraph, x, y) {
+		var viewMode = api.isViewMode, marks = api.ShowParaMarks;
+		api.isViewMode = true;
+		api.ShowParaMarks = false;
+		graphics.transform(1, 0, 0, 1, x * AscCommon.g_dKoef_pix_to_mm, y * AscCommon.g_dKoef_pix_to_mm);
+		paragraph.Draw(0, graphics);
+		graphics.transform(1, 0, 0, 1, 0, 0);
+		// The lines' pen again, as the canvas' restore would have it
+		var line = drawer.m_oSecondaryLineTextColor;
+		graphics.p_color(line.r, line.g, line.b, 255);
+		api.isViewMode = viewMode;
+		api.ShowParaMarks = marks;
+	};
+	drawer.draw();
 }
 
 // Pictures of choices (chart styles, table styles, slide layouts), drawn as pages with negative
@@ -1511,6 +1756,7 @@ window["eoStartEngine"] = function () {
 	};
 
 	var engine = window["eoEngine"] = {};
+	engine["takeImage"] = takeImage;
 	coEditingCommands(engine, api, allPagesChanged);
 	// Texts sdkjs puts into documents (table of contents, headers, placeholders), by their English text
 	engine["setTranslations"] = function (map) {
@@ -2018,6 +2264,64 @@ window["eoStartEngine"] = function () {
 	// 1 "1.", 2 "1)", 3 "I.", 4 "A.", 5 "a)", 6 "a.", 7 "i."; -1 removes the list. Text documents
 	// apply it in a promise: the state is right only in the next script (see EditorDocument.setList)
 	engine["setList"] = function (type, subtype) { api.put_ListType(type, subtype); };
+
+	// List presets (DOCUMENT_LIST_PRESETS, PRESENTATION_LIST_PRESETS) by kind ("bullets",
+	// "numbers", documents' "multilevel") and index; previews "list-<kind>" are their pictures.
+	// Documents apply them in a promise, as setList.
+	var listPresets = isPresentation ? PRESENTATION_LIST_PRESETS : DOCUMENT_LIST_PRESETS;
+	engine["setListPreset"] = function (kind, index) {
+		var preset = listPresets[kind][index];
+		if (isPresentation)
+			api.put_ListType(kind === "bullets" ? 0 : 1, preset["subtype"]);
+		else
+			api.put_ListTypeCustom(JSON.parse(preset));
+	};
+	// Multilevel lists of documents by their levels' formats and texts: sdkjs moves the levels'
+	// indents by the paragraph's own, after which its comparison (asc_IsCurrentNumberingPreset)
+	// finds them different
+	function isMultilevelPreset(preset) {
+		var paragraph = logicDocument.GetCurrentParagraph();
+		var numPr = paragraph && paragraph.GetNumPr();
+		var num = numPr && numPr.IsValid() ? logicDocument.GetNumbering().GetNum(numPr.NumId) : null;
+		if (!num)
+			return false;
+		var current = AscWord.CNumInfo.FromNum(num, null, logicDocument.GetStyles()).ToJson();
+		var levels = JSON.parse(preset)["Lvl"];
+		return levels.every(function (level, i) {
+			var other = current["Lvl"][i];
+			return other && other["numFmt"]["val"] === level["numFmt"]["val"] && other["lvlText"] === level["lvlText"];
+		});
+	}
+	// The presets of the paragraph at the cursor: {kind: index, -1 for none of them}
+	engine["getListPresets"] = function () {
+		var listType = isPresentation ? AscFormat.fGetListTypeFromBullet((logicDocument.GetCalculatedParaPr() || {}).Bullet) : null;
+		var result = {};
+		Object.keys(listPresets).forEach(function (kind) {
+			result[kind] = -1;
+			listPresets[kind].forEach(function (preset, index) {
+				var current = isPresentation
+					? listType && listType.Type === (kind === "bullets" ? 0 : 1) && listType.SubType === preset["subtype"]
+					: kind === "multilevel" ? isMultilevelPreset(preset) : api.asc_IsCurrentNumberingPreset(preset, true);
+				if (current && result[kind] < 0)
+					result[kind] = index;
+			});
+		});
+		return JSON.stringify(result);
+	};
+	Object.keys(listPresets).forEach(function (kind, type) {
+		previewKinds["list-" + kind] = function () {
+			return listPresets[kind].map(function (preset, index) {
+				var info = isPresentation ? { "bullet": JSON.parse(preset["bullet"]) } : JSON.parse(preset);
+				return {
+					id: String(index), name: "", width: LIST_PREVIEW_SIZE, height: LIST_PREVIEW_SIZE,
+					draw: function (g) { drawListPreview(api, info, type, g, LIST_PREVIEW_SIZE); }
+				};
+			});
+		};
+	});
+	// Documents: numbering the current list from 1 again, or on from the list before it
+	engine["restartNumbering"] = function () { api.asc_RestartNumbering(1); };
+	engine["continueNumbering"] = function () { api.asc_ContinueNumbering(); };
 	engine["indent"] = function (increase) {
 		if (increase)
 			api.IncreaseIndent();
@@ -2683,6 +2987,33 @@ window["eoStartEngine"] = function () {
 		api.ShapeApply(shapeTextVert(vert));
 	});
 
+	// Fills (see ascFill) of "shape", the selected shapes, or "slide", the current slide's background
+	engine["getFillResources"] = fillResourcesJson;
+	engine["setFill"] = function (target, fill) {
+		if (target === "slide") {
+			var properties = new Asc.CAscSlideProps();
+			properties.put_background(ascFill(api, fill));
+			api.SetSlideProps(properties);
+			allPagesChanged();
+		} else {
+			setShapeFill(fill);
+		}
+	};
+	var setShapeFill = drawingCommand(function (fill) {
+		var properties = new Asc.asc_CShapeProperty();
+		properties.asc_putFill(ascFill(api, fill));
+		api.ShapeApply(properties);
+	});
+	engine["getFill"] = function (target) {
+		if (target === "slide") {
+			var slide = isPresentation ? logicDocument.Slides[logicDocument.CurPage] : null;
+			return JSON.stringify(slide ? fillJson(slide.backgroundFill) : null);
+		}
+		var selected = editor.selectedDrawings();
+		var drawing = selected.length ? selected[0].drawing : null;
+		return JSON.stringify(drawing ? fillJson(drawing.brush || (drawing.spPr && drawing.spPr.Fill)) : null);
+	};
+
 	// z-order of the selected drawings: 0 to front, 1 forward, 2 to back, 3 backward
 	engine["arrange"] = drawingCommand(function (level) {
 		if (isPresentation) {
@@ -3084,6 +3415,17 @@ window["eoStartEngine"] = function () {
 		if (all)
 			api.SlideTransitionApplyToAll();
 	};
+	// How the current slide (or all) goes on to the next one in a slideshow: on a click (tap)
+	// and after afterDuration ms if after
+	engine["setSlideAdvance"] = function (onClick, after, afterDuration, all) {
+		var transition = new Asc.CAscSlideTransition();
+		transition.put_SlideAdvanceOnMouseClick(onClick);
+		transition.put_SlideAdvanceAfter(after);
+		transition.put_SlideAdvanceDuration(afterDuration);
+		api.ApplySlideTransition(transition);
+		if (all)
+			api.SlideTransitionApplyToAll();
+	};
 	engine["redo"] = function () { api.Redo(); allPagesChanged(); };
 
 	// Spell checking. sdkjs asks for words to be checked through SpellCheckApi; the requests are
@@ -3250,6 +3592,7 @@ if (!window["eoPdfFile"])
 function spreadsheetEngine(window, api) {
 	var native = window["native"];
 	var engine = window["eoEngine"] = {};
+	engine["takeImage"] = takeImage;
 	coEditingCommands(engine, api, function () { changed = true; }, true);
 	colorSchemeCommands(engine, api, function () { changed = true; });
 	engine["tick"] = runTimers;
@@ -3867,6 +4210,18 @@ function spreadsheetEngine(window, api) {
 	engine["setShapeFill"] = edit(function (hex) { applyShapeProperties(shapeFill(hex)); });
 	engine["setShapeOutline"] = edit(function (hex, width) { applyShapeProperties(shapeOutline(hex, width)); });
 	engine["setTextVert"] = edit(function (vert) { applyShapeProperties(shapeTextVert(vert)); });
+	// Fills of the selected shapes (target "shape", see ascFill)
+	engine["getFillResources"] = fillResourcesJson;
+	engine["setFill"] = edit(function (target, fill) {
+		var properties = new Asc.asc_CShapeProperty();
+		properties.asc_putFill(ascFill(api, fill));
+		applyShapeProperties(properties);
+	});
+	engine["getFill"] = function () {
+		var selected = selectedDrawings();
+		var drawing = selected.length ? selected[0].drawing : null;
+		return JSON.stringify(drawing ? fillJson(drawing.brush || (drawing.spPr && drawing.spPr.Fill)) : null);
+	};
 	// 0 to front, 1 forward, 2 to back, 3 backward (c_oAscDrawingLayerType)
 	engine["arrange"] = edit(function (level) { api.asc_setSelectedDrawingObjectLayer(level); });
 	engine["group"] = edit(function (group) {

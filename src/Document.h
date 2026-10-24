@@ -84,7 +84,8 @@ namespace eo
 		int SavePdf(const std::wstring& path);
 		int ExportPdf(const std::wstring& path, const std::wstring& password);
 		void ReopenPdf();
-		void WritePdfImages();
+		void WriteImages();
+		bool AttachTile(unsigned char* pixels, int width, int height, bool rgba);
 		bool ReplacePdfReader(const std::wstring& path);
 		int Decrypt(const std::wstring& path, const std::wstring& tempDir, const std::wstring& password, std::wstring& target);
 

@@ -104,5 +104,29 @@ t.run("text direction in shapes", function () {
 	eoEngine.setTextVert(3);
 	t.eq("rotated down", JSON.parse(eoEngine.drawingColors()).vert, 3);
 });
+// Draws each preview of a kind into a tile: no exceptions, something drawn
+function drawPreviews(kind) {
+	var items = JSON.parse(eoEngine.previews(kind));
+	items.forEach(function (item, i) {
+		eoEngine.beginTile();
+		eoEngine.drawTile(-1 - i, 64, 64, 0, 0, 64, 64);
+	});
+	return items.length;
+}
+t.run("list pictures", function () {
+	t.eq("bullet pictures", drawPreviews("list-bullets"), 7);
+	t.eq("number pictures", drawPreviews("list-numbers"), 7);
+	t.eq("multilevel pictures", drawPreviews("list-multilevel"), 7);
+});
+t.run("shape fills", function () {
+	eoEngine.insertShape("rect");
+	eoEngine.setFill("shape", { "type": "gradient", "angle": 45, "stops": [{ "color": "FF0000", "position": 0 }, { "color": "00FF00", "position": 50 }, { "color": "0000FF", "position": 100 }] });
+	var fill = JSON.parse(eoEngine.getFill("shape"));
+	t.ok("gradient with 3 stops", fill.type === "gradient" && fill.stops.length === 3);
+	eoEngine.setFill("shape", { "type": "pattern", "pattern": 0, "foreground": "000000", "background": "FFFFFF" });
+	t.eq("pattern", JSON.parse(eoEngine.getFill("shape")).type, "pattern");
+	eoEngine.setFill("shape", { "type": "none" });
+	t.eq("none", JSON.parse(eoEngine.getFill("shape")).type, "none");
+});
 t.noError("editing");
 t.done();

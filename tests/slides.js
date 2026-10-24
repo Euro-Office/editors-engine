@@ -177,5 +177,61 @@ t.run("text direction", function () {
 	eoEngine.setRtl(true);
 	t.eq("right to left", t.state().format.Rtl, true);
 });
+// Draws each preview of a kind into a tile: no exceptions, something drawn
+function drawPreviews(kind) {
+	var items = JSON.parse(eoEngine.previews(kind));
+	items.forEach(function (item, i) {
+		eoEngine.beginTile();
+		eoEngine.drawTile(-1 - i, 64, 64, 0, 0, 64, 64);
+	});
+	return items.length;
+}
+t.run("list presets", function () {
+	eoEngine.insertTextBox(0, 100, 100);
+	eoEngine.enterText("Item");
+	t.eq("bullet pictures", drawPreviews("list-bullets"), 7);
+	t.eq("number pictures", drawPreviews("list-numbers"), 7);
+	eoEngine.setListPreset("numbers", 5);
+	t.eq("the preset is current", JSON.parse(eoEngine.getListPresets()).numbers, 5);
+	t.eq("no bullets", JSON.parse(eoEngine.getListPresets()).bullets, -1);
+	eoEngine.setListPreset("bullets", 2);
+	t.eq("bullets now", JSON.parse(eoEngine.getListPresets()).bullets, 2);
+});
+t.run("fills", function () {
+	var resources = JSON.parse(eoEngine.getFillResources());
+	t.eq("patterns", resources.patterns.length, 54);
+	t.ok("8 x 8 each", resources.patterns.every(function (p) { return /^[01]{64}$/.test(p); }));
+	t.ok("textures", resources.textures.length > 5 && resources.textures[0].indexOf("data:image/png") === 0);
+	eoEngine.insertShape("rect");
+	eoEngine.setFill("shape", { "type": "gradient", "angle": 90, "stops": [{ "color": "FF0000", "position": 0 }, { "color": "theme:24", "position": 100 }] });
+	var fill = JSON.parse(eoEngine.getFill("shape"));
+	t.eq("gradient", fill.type, "gradient");
+	t.ok("its stops", fill.stops.length === 2 && fill.stops[0].color === "FF0000" && fill.stops[1].position === 100);
+	t.eq("its angle", fill.angle, 90);
+	eoEngine.setFill("shape", { "type": "gradient", "radial": true, "stops": [{ "color": "FFFFFF", "position": 0 }, { "color": "000000", "position": 100 }] });
+	t.eq("radial", JSON.parse(eoEngine.getFill("shape")).radial, true);
+	eoEngine.setFill("shape", { "type": "pattern", "pattern": 6, "foreground": "0000FF", "background": "FFFF00" });
+	fill = JSON.parse(eoEngine.getFill("shape"));
+	t.ok("pattern", fill.type === "pattern" && fill.pattern === 6 && fill.foreground === "0000FF" && fill.background === "FFFF00");
+	eoEngine.setFill("shape", { "type": "texture", "texture": 3 });
+	fill = JSON.parse(eoEngine.getFill("shape"));
+	t.ok("texture", fill.type === "texture" && fill.texture === 3);
+	// A picture's tiling without a new picture keeps the shape's
+	eoEngine.setFill("shape", { "type": "picture", "tile": false });
+	fill = JSON.parse(eoEngine.getFill("shape"));
+	t.ok("stretched, the same picture", fill.type === "texture" && fill.texture === 3);
+	eoEngine.setFill("slide", { "type": "gradient", "angle": 0, "stops": [{ "color": "00FF00", "position": 0 }, { "color": "0000FF", "position": 100 }] });
+	t.eq("slide background", JSON.parse(eoEngine.getFill("slide")).type, "gradient");
+	eoEngine.setFill("slide", { "type": "solid", "color": "FFFFFF" });
+	t.eq("solid", JSON.parse(eoEngine.getFill("slide")).color, "FFFFFF");
+});
+t.run("transition timing", function () {
+	var current = JSON.parse(eoEngine.getCurrentSlide());
+	eoEngine.setTransition(7, 15, 1500, false); // clock, counterclockwise
+	eoEngine.setSlideAdvance(false, true, 3000, false);
+	var transition = JSON.parse(eoEngine.getSlides())[current].transition;
+	t.ok("clock", transition.type === 7 && transition.option === 15 && transition.duration === 1500);
+	t.ok("after 3 s, not on a tap", !transition.onClick && transition.after && transition.afterDuration === 3000);
+});
 t.noError("slides");
 t.done();

@@ -663,21 +663,18 @@ namespace eo
 		bool done = m_private->Run(script, &result);
 		std::string text = done && result.IsString()
 			? std::wstring_convert<std::codecvt_utf8<wchar_t>>().to_bytes(result.ToString().c_str()) : std::string();
-		if (m_private->isPdf)
-		{
-			// What pdf.js asks of the engine after a command
-			int requests = (int)m_private->RunNumber(L"(window.eoPdfReopen ? 1 : 0) + (window.eoPdfImages ? 2 : 0)");
-			if (requests & 2)
-				WritePdfImages();
-			if (requests & 1)
-				ReopenPdf();
-		}
+		// What the scripts ask of the engine after a command
+		int requests = (int)m_private->RunNumber(L"(window.eoPdfReopen ? 1 : 0) + (window.eoImages ? 2 : 0)");
+		if (requests & 2)
+			WriteImages();
+		if (m_private->isPdf && (requests & 1))
+			ReopenPdf();
 		return text;
 	}
 
-	// Pictures sdkjs got as data URLs (pdf.js' sendImgUrls: of pages made editable), written to
-	// the images directory under the names pdf.js gave them
-	void Document::WritePdfImages()
+	// Pictures sdkjs has as data URLs (pdf.js' sendImgUrls: of pages made editable; textures and
+	// patterns), written to the images directory under the names engine.js' imageFile gave them
+	void Document::WriteImages()
 	{
 		CDocBuilderValue imagesDir;
 		if (!m_private->Run(L"eoEngine.getImagesDirectory()", &imagesDir) || !imagesDir.IsString())
@@ -754,6 +751,22 @@ namespace eo
 		return size;
 	}
 
+	// Attaches the pixel buffer to the graphics object sdkjs will draw into (eoEngine.tile, after
+	// beginTile; the document's context stays entered, see Open)
+	bool Document::AttachTile(unsigned char* pixels, int width, int height, bool rgba)
+	{
+		JSSmart<NSJSBase::CJSContext> context = NSJSBase::CJSContext::GetCurrent();
+		JSSmart<NSJSBase::CJSValue> native = context->GetGlobal()->get("eoEngine")->toObject()
+			->get("tile")->toObject()->get("Native");
+		CGraphicsEmbed* graphics = native->isObject()
+			? dynamic_cast<CGraphicsEmbed*>(native->toObject()->getNative())
+			: nullptr;
+		if (!graphics)
+			return false;
+		graphics->SetAppImage(new TileImage(pixels, width, height, rgba, m_private->imageCache));
+		return true;
+	}
+
 	bool Document::RenderTile(int page, int pageWidth, int pageHeight,
 	                          int x, int y, int width, int height,
 	                          unsigned char* pixels, bool rgba)
@@ -771,24 +784,20 @@ namespace eo
 			objects.resize((size_t)width * height * 4);
 			target = objects.data();
 		}
-		if (!m_private->Run(L"eoEngine.beginTile();"))
+		if (!m_private->Run(L"eoEngine.beginTile();") || !AttachTile(target, width, height, rgba))
 			return false;
 
-		// Attach the pixel buffer to the graphics object sdkjs will draw into
-		// (the document's context stays entered, see Open)
-		JSSmart<NSJSBase::CJSContext> context = NSJSBase::CJSContext::GetCurrent();
-		JSSmart<NSJSBase::CJSValue> native = context->GetGlobal()->get("eoEngine")->toObject()
-			->get("tile")->toObject()->get("Native");
-		CGraphicsEmbed* graphics = native->isObject()
-			? dynamic_cast<CGraphicsEmbed*>(native->toObject()->getNative())
-			: nullptr;
-		if (!graphics)
-			return false;
-		graphics->SetAppImage(new TileImage(target, width, height, rgba, m_private->imageCache));
-
-		bool drawn = m_private->Run(L"eoEngine.drawTile(" +
+		std::wstring draw = L"eoEngine.drawTile(" +
 			std::to_wstring(page) + L", " + std::to_wstring(pageWidth) + L", " + std::to_wstring(pageHeight) + L", " +
-			std::to_wstring(x) + L", " + std::to_wstring(y) + L", " + std::to_wstring(width) + L", " + std::to_wstring(height) + L");");
+			std::to_wstring(x) + L", " + std::to_wstring(y) + L", " + std::to_wstring(width) + L", " + std::to_wstring(height) + L");";
+		bool drawn = m_private->Run(draw);
+		// Textures and patterns the tile has for the first time become files (engine.js' imageFile),
+		// which the graphics draw from: once they are written, the tile is drawn again
+		if (drawn && m_private->RunNumber(L"window.eoImages ? 1 : 0") == 1)
+		{
+			WriteImages();
+			drawn = m_private->Run(L"eoEngine.beginTile();") && AttachTile(target, width, height, rgba) && m_private->Run(draw);
+		}
 		// The objects over the page, by their opacity (the byte order is the same in both)
 		for (size_t i = 0; i < objects.size(); i += 4)
 		{
