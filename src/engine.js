@@ -2385,8 +2385,28 @@ window["eoStartEngine"] = function () {
 	engine["setFontSize"] = function (size) { api.put_TextPrFontSize(size); };
 	engine["setStrikeout"] = function (value) { api.put_TextPrStrikeout(value); };
 	// Text documents: all caps or small caps
-	engine["setCaps"] = function (value) { api.put_TextPrCaps(value); };
-	engine["setSmallCaps"] = function (value) { api.put_TextPrSmallCaps(value); };
+	// Presentations have them in the paragraph settings only, as web-apps' advanced settings set
+	// them (the paragraph's own settings left as they are); one turns the other off
+	function presentationCaps(allCaps, smallCaps) {
+		var properties = new Asc.asc_CParagraphProperty();
+		properties.Ind = null;
+		properties.Spacing = null;
+		properties.put_AllCaps(allCaps);
+		properties.put_SmallCaps(smallCaps);
+		api.paraApply(properties);
+	}
+	engine["setCaps"] = function (value) {
+		if (isPresentation)
+			presentationCaps(value, value ? false : undefined);
+		else
+			api.put_TextPrCaps(value);
+	};
+	engine["setSmallCaps"] = function (value) {
+		if (isPresentation)
+			presentationCaps(value ? false : undefined, value);
+		else
+			api.put_TextPrSmallCaps(value);
+	};
 	// 0 baseline, 1 subscript, 2 superscript
 	engine["setBaseline"] = function (value) { api.put_TextPrBaseline(value); };
 	// A color (see ascColor), or "" for automatic

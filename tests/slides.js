@@ -192,6 +192,17 @@ t.run("text direction", function () {
 	eoEngine.setRtl(true);
 	t.eq("right to left", t.state().format.Rtl, true);
 });
+t.run("all caps and small caps", function () {
+	eoEngine.insertTextBox(0, 100, 140);
+	eoEngine.enterText("Caps");
+	eoEngine.selectAll();
+	eoEngine.setCaps(true);
+	t.eq("all caps", [t.state().format.Caps, t.state().format.SmallCaps].join(), "true,false");
+	eoEngine.setSmallCaps(true);
+	t.eq("small caps instead", [t.state().format.Caps, t.state().format.SmallCaps].join(), "false,true");
+	eoEngine.setSmallCaps(false);
+	t.eq("neither", [t.state().format.Caps, t.state().format.SmallCaps].join(), "false,false");
+});
 // Draws each preview of a kind into a tile: no exceptions, something drawn
 function drawPreviews(kind) {
 	var items = JSON.parse(eoEngine.previews(kind));
