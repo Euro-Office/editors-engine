@@ -54,7 +54,7 @@ target_include_directories(hunspell PUBLIC "${HUNSPELL_DIR}")
 target_compile_definitions(hunspell PUBLIC HUNSPELL_STATIC)
 set_target_properties(hunspell PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
-add_library(eoengine SHARED src/Document.cpp src/DrawingDocument.cpp src/Speller.cpp)
+add_library(eoengine SHARED src/Document.cpp src/DrawingDocument.cpp src/Speller.cpp src/TextFile.cpp)
 target_include_directories(eoengine
     PUBLIC src
     PRIVATE "${CORE_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}"

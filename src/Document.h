@@ -1,5 +1,7 @@
 #pragma once
 
+#include "TextFile.h"
+
 #include <memory>
 #include <string>
 
@@ -41,7 +43,11 @@ namespace eo
 		// needs its password, and is saved with it again. PDFs other than forms of the document
 		// editor open in sdkjs' PDF editor (pdf.js) and are saved as PDF only. Returns 0, the x2t error code
 		// (ERROR_PASSWORD for a missing or wrong password) or -1.
-		int Open(const std::wstring& path, const std::wstring& tempDir, const std::wstring& password = L"");
+		// Plain text (txt, csv) is read with text's options; what they leave open is guessed
+		// (TextFile::Guess, with language, the user's: "de", "zh-TW", ...). The options used are in
+		// eoEngine.textOptions ({encoding, delimiter}); a csv is saved with them again.
+		int Open(const std::wstring& path, const std::wstring& tempDir, const std::wstring& password = L"",
+		         const TextOptions& text = TextOptions(), const std::wstring& language = L"");
 		void Close();
 
 		// Saves the document with its edits to path, converted by x2t to the format of

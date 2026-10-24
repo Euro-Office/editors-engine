@@ -6,7 +6,9 @@
 // Scripts run in sdkjs after opening (e.g. editing commands from engine.js); their
 // results are printed. Other paths save the document there. PDFs open in sdkjs' PDF editor
 // (pdf.js); XPS and DjVu files, and PDFs with EO_PDF_READER=1, are drawn by core's readers
-// instead (password in EO_PASSWORD).
+// instead (password in EO_PASSWORD). Plain text (txt, csv) is read with the encoding and
+// delimiter in EO_ENCODING and EO_DELIMITER (x2t's numbers), guessed if not set, with the legacy
+// encoding of EO_LANGUAGE ("ru", ...).
 //
 // With EO_REPL=1, eo-render then reads JavaScript from stdin, one script per line, and prints
 // each result on a line starting with "@@" (for drivers such as the co-editing check).
@@ -226,7 +228,14 @@ int main(int argc, char* argv[])
 
 		auto start = std::chrono::steady_clock::now();
 		const char* password = getenv("EO_PASSWORD");
-		int opened = document.Open(ToWide(argv[2]), ToWide(outDir + "/tmp"), password ? ToWide(password) : L"");
+		eo::TextOptions text;
+		if (getenv("EO_ENCODING"))
+			text.encoding = std::atoi(getenv("EO_ENCODING"));
+		if (getenv("EO_DELIMITER"))
+			text.delimiter = std::atoi(getenv("EO_DELIMITER"));
+		const char* language = getenv("EO_LANGUAGE");
+		int opened = document.Open(ToWide(argv[2]), ToWide(outDir + "/tmp"), password ? ToWide(password) : L"",
+		                           text, language ? ToWide(language) : L"");
 		if (opened != 0)
 		{
 			std::cerr << (opened == eo::Document::ERROR_PASSWORD ? "needs a password" : "open failed") << " (" << opened << ")" << std::endl;

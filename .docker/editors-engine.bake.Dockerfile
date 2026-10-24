@@ -61,6 +61,7 @@ FROM engine-host AS engine-tests-run
     # The tests name their documents relative to the monorepo
     WORKDIR /work
     COPY document-templates/sample document-templates/sample
+    COPY editors-engine/tests/documents editors-engine/tests/documents
     RUN mkdir -p /out && \
         { OUT_DIR=/out/files /editors-engine/tests/run.sh /engine/eo-render ${RUNTIME} \
             > /out/tests.log 2>&1; echo $? > /out/result; } && \

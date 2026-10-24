@@ -177,6 +177,8 @@ namespace eo
 		std::wstring password;
 		// A PDF form (ONLYOFFICE's, opened in the document editor) is saved as one again
 		bool isPdfForm = false;
+		// Plain text: how it was read, to write it the same way again
+		TextOptions text;
 		// Another PDF, in sdkjs' PDF editor (OpenPdf): sdkjs and the pages read a copy of the
 		// file (the app replaces the file when saving), whose pages are drawn by core's reader
 		bool isPdf = false;
@@ -348,7 +350,19 @@ namespace eo
 		return result;
 	}
 
-	int Document::Open(const std::wstring& path, const std::wstring& tempDir, const std::wstring& password)
+	// x2t's options for plain text, which it can't open without (AVS_FILEUTILS_ERROR_CONVERT_NEED_PARAMS)
+	static std::wstring TextParams(const TextOptions& text)
+	{
+		std::wstring params;
+		if (text.encoding >= 0)
+			params += L"<m_nCsvTxtEncoding>" + std::to_wstring(text.encoding) + L"</m_nCsvTxtEncoding>";
+		if (text.delimiter >= 0)
+			params += L"<m_nCsvDelimiter>" + std::to_wstring(text.delimiter) + L"</m_nCsvDelimiter>";
+		return params;
+	}
+
+	int Document::Open(const std::wstring& path, const std::wstring& tempDir, const std::wstring& password,
+	                   const TextOptions& text, const std::wstring& language)
 	{
 		Close();
 
@@ -370,7 +384,9 @@ namespace eo
 		}
 		std::wstring extension = path.substr(path.find_last_of(L'.') + 1);
 		std::transform(extension.begin(), extension.end(), extension.begin(), ::towlower);
-		int converted = m_private->builder->OpenFile(openPath.c_str(), L"");
+		if (TextFile::IsTextFormat(extension))
+			m_private->text = TextFile::Guess(openPath, extension, language, text);
+		int converted = m_private->builder->OpenFile(openPath.c_str(), TextParams(m_private->text).c_str());
 		if (openPath != path)
 			NSFile::CFileBinary::Remove(openPath);
 		// Other PDFs than forms of the document editor: sdkjs' PDF editor
@@ -403,6 +419,10 @@ namespace eo
 			return -1;
 		}
 		timer.Log("layout (engine.js)");
+		// For the apps (a choice of others) and the tests
+		if (m_private->text.encoding >= 0)
+			m_private->Run(L"eoEngine.textOptions = {encoding: " + std::to_wstring(m_private->text.encoding) +
+				L", delimiter: " + std::to_wstring(m_private->text.delimiter) + L"};");
 		return 0;
 	}
 
@@ -462,6 +482,7 @@ namespace eo
 	void Document::Close()
 	{
 		m_private->isPdf = false;
+		m_private->text = TextOptions();
 		m_private->scope.reset();
 		m_private->context.reset();
 		if (m_private->builder)
@@ -525,6 +546,10 @@ namespace eo
 		int formatType = format->second;
 		m_private->Run(L"eoEngine.beforeSave();");
 		std::wstring params = password.empty() ? L"" : L"<m_sSavePassword>" + XmlEscape(password) + L"</m_sSavePassword>";
+		// A csv saved as csv keeps its encoding and delimiter. x2t writes txt in UTF-8 (with a byte
+		// order mark) whatever its encoding, other csv in UTF-8 with commas.
+		if (key == L"csv" && m_private->text.delimiter >= 0)
+			params += TextParams(m_private->text);
 		int error = m_private->builder->SaveFile(formatType, path.c_str(), params.empty() ? nullptr : params.c_str());
 		m_private->Run(std::wstring(L"eoEngine.afterSave(") + (error == 0 ? L"true" : L"false") + L");");
 		return error;
