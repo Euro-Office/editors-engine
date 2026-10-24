@@ -131,6 +131,21 @@ t.run("text angle and direction", function () {
 	eoEngine.setRtl(false);
 	t.eq("left to right", t.state().sheet.cellFormat.rtl, false);
 });
+t.run("cell styles", function () {
+	var names = JSON.parse(eoEngine.getCellStyles());
+	t.ok("built-in styles: " + names.length, names.indexOf("Good") >= 0 && names.indexOf("Heading 1") >= 0);
+	var pictures = JSON.parse(eoEngine.previews("cellStyles"));
+	t.eq("a picture each", pictures.length, names.length);
+	eoEngine.setStyleLabels(JSON.stringify({ "Good": "Gut" }));
+	var good = names.indexOf("Good");
+	eoEngine.beginTile();
+	t.ok("the picture of \"Good\" drawn", eoEngine.drawTile(-1 - good, 112, 36, 0, 0, 112, 36));
+	eoEngine.selectCells(10, 10, 10, 10);
+	eoEngine.setCellStyle("Good");
+	var format = t.state().sheet.cellFormat;
+	t.eq("the cell's style", format.style, "Good");
+	t.eq("its fill", format.fill, "C6EFCE");
+});
 
 t.run("draws text at an angle in tiles", function () {
 	// Down45 in a column of its own, in a tile that starts at that column: sdkjs sets the text's

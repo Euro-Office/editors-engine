@@ -3918,6 +3918,90 @@ function spreadsheetEngine(window, api) {
 	var previewKinds = {};
 	var previews = previewCommands(engine, resources, previewKinds);
 
+	// Cell styles as the web editor lists them (the document's own first, hidden ones not), by
+	// their names; a built-in one the document changed as it has it
+	function cellStyles() {
+		var styles = api.wbModel.CellStyles, result = [];
+		styles.CustomStyles.forEach(function (style) {
+			if (!style.Hidden && null === style.BuiltinId)
+				result.push({ name: style.Name, style: style });
+		});
+		styles.DefaultStyles.forEach(function (style) {
+			if (!style.Hidden)
+				result.push({ name: style.Name, style: styles.getCustomStyleByBuiltinId(style.BuiltinId) || style });
+		});
+		return result;
+	}
+	engine["getCellStyles"] = function () {
+		return JSON.stringify(cellStyles().map(function (item) { return item.name; }));
+	};
+	engine["setCellStyle"] = edit(function (name) { api.asc_setCellStyle(name); });
+	// Pictures of them (ids their names), as sdkjs draws them for the web editor (drawStyle of
+	// cell/utils/utils.js, not exported): the fill, the name in the style's font and color
+	// (16 pt at most) and the borders; through a printer, as sheet tiles are drawn. The names in
+	// the language setStyleLabels gave ({name: label}).
+	var styleLabels = {};
+	engine["setStyleLabels"] = function (json) { styleLabels = JSON.parse(json); };
+	var CELL_STYLE_WIDTH = 112, CELL_STYLE_HEIGHT = 36; // pixels
+	function drawCellStyle(g, style, label) {
+		var width = CELL_STYLE_WIDTH, height = CELL_STYLE_HEIGHT;
+		g.BeginPage = g.EndPage = function () {};
+		var printer = new AscCommonExcel.CPdfPrinter(api.wb.fmgrGraphics[3], api.wb.m_oFont.clone());
+		printer.DocumentRenderer = g;
+		if (style.ApplyFill) {
+			var fill = style.getFill();
+			if (fill)
+				AscCommonExcel.drawFillCell(printer, g, fill, new AscCommon.asc_CRect(0, 0, width, height));
+		}
+		var format = style.getFont().clone();
+		format.setSize(Math.min(format.getSize(), 16));
+		var fragment = new AscCommonExcel.Fragment();
+		fragment.setFragmentText(label);
+		fragment.format = format;
+		var flags = new AscCommonExcel.CellFlags();
+		flags.textAlign = style.xfs.align && style.xfs.align.hor;
+		var render = api.wb.stringRender;
+		var metrics = render.measureString([fragment], flags, width);
+		var align = render.getEffectiveAlign();
+		var x = align === AscCommon.align_Center ? Asc.round(0.5 * (width - metrics.width)) :
+			align === AscCommon.align_Right ? Asc.round(width - metrics.width - 4) : 4;
+		var drawingCtx = render.drawingCtx;
+		render.drawingCtx = printer;
+		try {
+			render.render(printer, x, Asc.round(0.5 * (height - metrics.height)), metrics.width, style.getFontColor() || new AscCommon.CColor(0, 0, 0));
+		} finally {
+			render.drawingCtx = drawingCtx;
+		}
+		if (style.ApplyBorder) {
+			var borders = style.getBorder();
+			[[borders.l, 0, 0, 0, height], [borders.b, 0, height - 1, width, height - 1],
+				[borders.r, width - 1, height, width - 1, 0], [borders.t, width, 0, 0, 0]].forEach(function (line) {
+				var border = line[0];
+				if (!border || !(border.w > 0))
+					return;
+				printer.setStrokeStyle(border.getColorOrDefault());
+				printer.setLineWidth(border.w);
+				printer.setLineDash(border.getDashSegments());
+				printer.beginPath();
+				if (line[2] === line[4])
+					printer.lineHor(line[1], line[2], line[3]);
+				else
+					printer.lineVer(line[1], line[2], line[4]);
+				printer.stroke();
+			});
+		}
+	}
+	previewKinds["cellStyles"] = function () {
+		// The printer's millimeters per pixel
+		var mmPerPixel = 25.4 / (96 * api.asc_getZoom()) / AscCommon.AscBrowser.retinaPixelRatio;
+		return cellStyles().map(function (item) {
+			return {
+				id: item.name, name: item.name, width: CELL_STYLE_WIDTH * mmPerPixel, height: CELL_STYLE_HEIGHT * mmPerPixel,
+				draw: function (g) { drawCellStyle(g, item.style, styleLabels[item.name] || item.name); }
+			};
+		});
+	};
+
 	engine["drawTile"] = function (page, pageWidth, pageHeight, x, y, width, height) {
 		if (page < 0)
 			return previews.draw(-1 - page, pageWidth, pageHeight, x, y, width, height);
@@ -4280,6 +4364,7 @@ function spreadsheetEngine(window, api) {
 		return {
 			"numFormat": xfs.asc_getNumFormat() || "General",
 			"numFormatType": xfs.asc_getNumFormatInfo() ? xfs.asc_getNumFormatInfo().asc_getType() : 0,
+			"style": info.asc_getStyleName() || "",
 			"fill": colorHex(xfs.asc_getFillColor()),
 			"wrap": !!xfs.asc_getWrapText(),
 			"merged": info.asc_getMerge() === Asc.c_oAscMergeOptions.Merge || info.asc_getMerge() === Asc.c_oAscMergeOptions.MergeCenter,
