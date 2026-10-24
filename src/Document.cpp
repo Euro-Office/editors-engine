@@ -352,6 +352,16 @@ namespace eo
 		return result;
 	}
 
+	static bool IsEmptyFile(const std::wstring& path)
+	{
+		NSFile::CFileBinary file;
+		if (!file.OpenFile(path))
+			return false;
+		bool empty = file.GetFileSize() == 0;
+		file.CloseFile();
+		return empty;
+	}
+
 	// x2t's options for plain text, which it can't open without (AVS_FILEUTILS_ERROR_CONVERT_NEED_PARAMS)
 	static std::wstring TextParams(const TextOptions& text)
 	{
@@ -391,6 +401,20 @@ namespace eo
 		}
 		std::wstring extension = path.substr(path.find_last_of(L'.') + 1);
 		std::transform(extension.begin(), extension.end(), extension.begin(), ::towlower);
+		// An empty text file: x2t converts none, so a copy with one empty line
+		if (TextFile::IsTextFormat(extension) && IsEmptyFile(openPath))
+		{
+			std::wstring blank = tempDir + L"/empty." + extension;
+			NSDirectory::CreateDirectories(tempDir);
+			NSFile::CFileBinary file;
+			if (file.CreateFileW(blank))
+			{
+				BYTE line = '\n';
+				file.WriteFile(&line, 1);
+				file.CloseFile();
+				openPath = blank;
+			}
+		}
 		if (TextFile::IsTextFormat(extension))
 			m_private->text = TextFile::Guess(openPath, extension, language, text);
 		int converted = m_private->builder->OpenFile(openPath.c_str(), TextParams(m_private->text).c_str());
