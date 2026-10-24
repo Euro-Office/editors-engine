@@ -117,6 +117,16 @@ t.run("list pictures", function () {
 	t.eq("bullet pictures", drawPreviews("list-bullets"), 7);
 	t.eq("number pictures", drawPreviews("list-numbers"), 7);
 	t.eq("multilevel pictures", drawPreviews("list-multilevel"), 7);
+	var numbering = JSON.parse(eoEngine.previews("list-numbering"));
+	t.eq("numbers, then multilevel lists", [0, 6, 7, 13].map(function (i) { return numbering[i].id; }).join(),
+		"numbers-0,numbers-6,multilevel-0,multilevel-6");
+	t.eq("numbering pictures", drawPreviews("list-numbering"), 14);
+});
+t.run("style pictures", function () {
+	eoEngine.setStyleLabels(JSON.stringify({ "Heading 1": "Überschrift 1" }));
+	var styles = JSON.parse(eoEngine.getStyles());
+	t.ok("styles", styles.length > 0);
+	t.eq("a picture each", drawPreviews("paragraphStyles"), styles.length);
 });
 t.run("shape fills", function () {
 	eoEngine.insertShape("rect");

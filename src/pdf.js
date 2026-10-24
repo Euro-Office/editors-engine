@@ -1295,7 +1295,8 @@ function pdfEngine(api) {
 				result["SpacingBefore"] = paraPr.Spacing.Before;
 				result["SpacingAfter"] = paraPr.Spacing.After;
 			}
-			result["List"] = paraPr.Bullet && paraPr.Bullet.getBulletType ? paraPr.Bullet.getBulletType() : -1;
+			// -1 no list, 0 bullets, 1 numbers
+			result["List"] = paraPr.Bullet ? AscFormat.fGetListTypeFromBullet(paraPr.Bullet).Type : -1;
 		}
 		return result;
 	}

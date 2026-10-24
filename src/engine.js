@@ -2238,11 +2238,14 @@ window["eoStartEngine"] = function () {
 			result["SpacingBefore"] = paraPr.Spacing.Before;
 			result["SpacingAfter"] = paraPr.Spacing.After;
 		}
+		// -1 no list, 0 bullets, 1 numbers (documents' bullets are numbering too: by its level)
 		if (isPresentation) {
-			var bullet = paraPr && paraPr.Bullet;
-			result["List"] = bullet && bullet.getBulletType ? bullet.getBulletType() : -1;
+			result["List"] = paraPr && paraPr.Bullet ? AscFormat.fGetListTypeFromBullet(paraPr.Bullet).Type : -1;
 		} else {
-			result["List"] = api.asc_GetCurrentNumberingId && api.asc_GetCurrentNumberingId() !== null ? (paraPr && paraPr.NumPr ? 1 : 0) : -1;
+			var numId = api.asc_GetCurrentNumberingId ? api.asc_GetCurrentNumberingId() : null;
+			var num = numId !== null ? logicDocument.GetNumbering().GetNum(numId) : null;
+			var level = num ? num.GetLvl(paraPr && paraPr.NumPr && paraPr.NumPr.Lvl ? paraPr.NumPr.Lvl : 0) : null;
+			result["List"] = level ? (level.IsBulleted() ? 0 : 1) : -1;
 			var styles = logicDocument.Get_Styles();
 			var styleId = paraPr && paraPr.PStyle ? paraPr.PStyle : styles.Get_Default_Paragraph();
 			var style = styleId && styles.Get(styleId);
@@ -2335,6 +2338,19 @@ window["eoStartEngine"] = function () {
 			});
 		};
 	});
+	// Documents: numbers and multilevel lists in one ("list-numbering"), ids "<kind>-<index>"
+	// and the kind as name
+	if (!isPresentation) {
+		previewKinds["list-numbering"] = function () {
+			return ["numbers", "multilevel"].reduce(function (items, kind) {
+				return items.concat(previewKinds["list-" + kind]().map(function (item) {
+					item.id = kind + "-" + item.id;
+					item.name = kind;
+					return item;
+				}));
+			}, []);
+		};
+	}
 	// Documents: numbering the current list from 1 again, or on from the list before it
 	engine["restartNumbering"] = function () { api.asc_RestartNumbering(1); };
 	engine["continueNumbering"] = function () { api.asc_ContinueNumbering(); };
@@ -2368,6 +2384,43 @@ window["eoStartEngine"] = function () {
 		return JSON.stringify(names);
 	};
 	engine["setStyle"] = function (name) { api.put_Style(name); };
+	// Pictures of the paragraph styles (getStyles' order, ids their names): the name in the
+	// style, as the web editor shows them (wider, for longer names), in the language
+	// setStyleLabels gave ({name: label})
+	var styleLabels = {};
+	engine["setStyleLabels"] = function (json) { styleLabels = JSON.parse(json); };
+	var STYLE_PREVIEW_WIDTH = 150 * AscCommon.g_dKoef_pix_to_mm;
+	var STYLE_PREVIEW_HEIGHT = 40 * AscCommon.g_dKoef_pix_to_mm;
+	previewKinds["paragraphStyles"] = function () {
+		if (isPresentation)
+			return [];
+		var styles = logicDocument.Get_Styles();
+		var generator = new AscCommonWord.CStylesPainter().previewGenerator;
+		generator.api = api;
+		generator.STYLE_THUMBNAIL_WIDTH = 150;
+		generator.STYLE_THUMBNAIL_HEIGHT = 40;
+		return JSON.parse(engine["getStyles"]()).map(function (name) {
+			return {
+				id: name, name: name, width: STYLE_PREVIEW_WIDTH, height: STYLE_PREVIEW_HEIGHT,
+				draw: function (g) {
+					var id = styles.GetStyleIdByName(name);
+					var style = styles.Get_Pr(id, AscWord.styletype_Paragraph);
+					style.Name = name;
+					style.Id = id;
+					// The flat design's picture (the canvas' white background is the tile's)
+					var flat = window["flat_desine"];
+					window["flat_desine"] = true;
+					g.m_oContext = { fillRect: function () {} };
+					try {
+						generator.drawStyle(api, g, style, styleLabels[name] || name);
+					} finally {
+						window["flat_desine"] = flat;
+						delete g.m_oContext;
+					}
+				}
+			};
+		});
+	};
 
 	// Fonts the engine has (from the font index), sorted
 	engine["getFonts"] = function () {
@@ -4231,7 +4284,15 @@ function spreadsheetEngine(window, api) {
 	engine["setFill"] = edit(function (target, fill) {
 		var properties = new Asc.asc_CShapeProperty();
 		properties.asc_putFill(ascFill(api, fill));
-		applyShapeProperties(properties);
+		if (fill["type"] === "picture" && fill["picture"]) {
+			// A picture of the images directory: sdkjs would upload its name as a URL first
+			// (sendImgUrls, to a document server) and apply it with the server's answer
+			var imageProperties = new Asc.asc_CImgProperty();
+			imageProperties.ShapeProperties = properties;
+			view().objectRender.setGraphicObjectProps(imageProperties);
+		} else {
+			applyShapeProperties(properties);
+		}
 	});
 	engine["getFill"] = function () {
 		var selected = selectedDrawings();

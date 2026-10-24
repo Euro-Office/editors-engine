@@ -54,6 +54,14 @@ t.run("inserts a picture at its size", function () {
 	var picture = drawings[drawings.length - 1].graphicObject;
 	t.ok("its size", Math.abs(picture.extX - 400 * 25.4 / 96) < 1 && Math.abs(picture.extY - 200 * 25.4 / 96) < 1);
 });
+t.run("a shape filled with a picture", function () {
+	eoEngine.selectCells(5, 3, 5, 3);
+	eoEngine.insertShape("rect");
+	eoEngine.setFill("shape", { "type": "picture", "picture": "picture.png", "width": 400, "height": 200, "tile": false });
+	var drawings = Asc.editor.wb.getWorksheet().model.Drawings;
+	var fill = drawings[drawings.length - 1].graphicObject.spPr.Fill.fill;
+	t.ok("its picture", fill.type === Asc.c_oAscFill.FILL_TYPE_BLIP && fill.RasterImageId.indexOf("picture.png") >= 0);
+});
 t.run("borders of one side", function () {
 	eoEngine.selectCells(4, 6, 4, 6);
 	eoEngine.setBorders("left");

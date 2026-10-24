@@ -193,9 +193,11 @@ t.run("list presets", function () {
 	t.eq("number pictures", drawPreviews("list-numbers"), 7);
 	eoEngine.setListPreset("numbers", 5);
 	t.eq("the preset is current", JSON.parse(eoEngine.getListPresets()).numbers, 5);
+	t.eq("numbers in the state", t.state().format.List, 1);
 	t.eq("no bullets", JSON.parse(eoEngine.getListPresets()).bullets, -1);
 	eoEngine.setListPreset("bullets", 2);
 	t.eq("bullets now", JSON.parse(eoEngine.getListPresets()).bullets, 2);
+	t.eq("bullets in the state", t.state().format.List, 0);
 });
 t.run("fills", function () {
 	var resources = JSON.parse(eoEngine.getFillResources());
