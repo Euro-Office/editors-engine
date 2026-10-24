@@ -17,6 +17,11 @@ t.ok("the page can be edited", eoEngine.canEditPage(0));
 t.ok("as the state says", t.state().pdf.canEditPage === true);
 t.eq("drawn from the file", eoEngine.pageOrigin(0), 0);
 
+t.run("has standard colors, no theme's", function () {
+	var colors = JSON.parse(eoEngine.getThemeColors());
+	t.eq("no theme", colors.theme.length, 0);
+	t.eq("standard colors", colors.standard.length, 10);
+});
 t.run("makes the page editable", function () {
 	eoEngine.editPage(0);
 	var state = t.state();

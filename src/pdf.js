@@ -1328,6 +1328,10 @@ function pdfEngine(api) {
 			api.put_TextColor(auto);
 		}
 	};
+	// PDFs have no theme: only the standard colors (see engine.js' colorSchemeCommands)
+	engine["getThemeColors"] = function () {
+		return JSON.stringify({ "theme": [], "standard": standardColors() });
+	};
 	// The PDF editor's markers are markups (see markup)
 	engine["setHighlight"] = function () {};
 	engine["clearFormatting"] = function () { api.ClearFormating(); };

@@ -95,5 +95,18 @@ t.run("draws sheets with a header and footer", function () {
 	eoEngine.drawTile(0, 1024, Math.round(1024 * eoEngine.getPageHeight(0) / eoEngine.getPageWidth(0)), 0, 0, 256, 256);
 	t.ok("print drawing's base transform", typeof AscCommon.CNativeGraphics.prototype.SetBaseTransform === "function");
 });
+t.run("theme colors", function () {
+	var colors = JSON.parse(eoEngine.getThemeColors());
+	t.eq("6 of each of the theme's 10 colors", colors.theme.length, 60);
+	t.eq("standard colors", colors.standard.length, 10);
+	eoEngine.selectCells(8, 8, 8, 8);
+	eoEngine.setCellFill("theme:33"); // accent 2, darker
+	eoEngine.setTextColor("theme:24"); // accent 1
+	var format = t.state().sheet.cellFormat;
+	t.eq("the cell's fill", format.fill, colors.theme[33]);
+	t.eq("its text's color", format.color, colors.theme[24]);
+	eoEngine.setCellFill("");
+	t.eq("no fill", t.state().sheet.cellFormat.fill, "");
+});
 
 t.done();

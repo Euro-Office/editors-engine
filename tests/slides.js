@@ -151,5 +151,21 @@ t.run("document fonts", function () {
 	t.ok("listed: " + used.join(), used.length > 0 && used.indexOf("Arial") >= 0);
 	t.ok("without the theme's placeholders", used.every(function (name) { return name.charAt(0) !== "+"; }));
 });
+t.run("theme colors", function () {
+	var colors = JSON.parse(eoEngine.getThemeColors());
+	t.eq("6 of each of the theme's 10 colors", colors.theme.length, 60);
+	eoEngine.insertShape("rect");
+	eoEngine.setShapeFill("theme:30"); // accent 2
+	eoEngine.setShapeOutline("theme:9", 1); // text 1, lighter
+	var drawing = JSON.parse(eoEngine.drawingColors());
+	t.eq("the shape's fill", drawing.fill, colors.theme[30]);
+	t.eq("its outline", drawing.outline, colors.theme[9]);
+	var schemes = JSON.parse(eoEngine.getColorSchemes());
+	eoEngine.setColorScheme(schemes.current === 1 ? 2 : 1);
+	var changed = JSON.parse(eoEngine.getThemeColors());
+	t.ok("other theme colors", changed.theme[30] !== colors.theme[30]);
+	t.eq("the fill changed with them", JSON.parse(eoEngine.drawingColors()).fill, changed.theme[30]);
+	eoEngine.undo();
+});
 t.noError("slides");
 t.done();

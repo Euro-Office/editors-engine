@@ -58,5 +58,26 @@ t.run("formats a selected chart's text", function () {
 	eoEngine.setBold(bold);
 	t.eq("and back", !!t.state().interface.Bold, bold);
 });
+t.run("theme colors", function () {
+	var colors = JSON.parse(eoEngine.getThemeColors());
+	t.eq("6 of each of the theme's 10 colors", colors.theme.length, 60);
+	t.eq("standard colors", colors.standard.length, 10);
+	eoEngine.keyDown(36, false, true); // Ctrl+Home
+	eoEngine.keyDown(39, true, true); // Ctrl+Shift+Right: a word
+	eoEngine.setTextColor("theme:26"); // accent 1, lighter
+	t.eq("the text's color", t.state().format.Color, colors.theme[26]);
+	var textPr = Asc.editor.WordControl.m_oLogicDocument.GetCalculatedTextPr();
+	t.eq("a color of the theme", textPr.Unifill && textPr.Unifill.fill.color.color.type, Asc.c_oAscColor.COLOR_TYPE_SCHEME);
+	var schemes = JSON.parse(eoEngine.getColorSchemes());
+	eoEngine.setColorScheme(schemes.current === 1 ? 2 : 1);
+	var changed = JSON.parse(eoEngine.getThemeColors());
+	t.ok("other theme colors", changed.theme[26] !== colors.theme[26]);
+	t.eq("the text's color changed with them", t.state().format.Color, changed.theme[26]);
+	eoEngine.setTextColor("C00000");
+	t.eq("an RGB color", t.state().format.Color, "C00000");
+	eoEngine.undo();
+	eoEngine.undo();
+	eoEngine.undo();
+});
 t.noError("editing");
 t.done();

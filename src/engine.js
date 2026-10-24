@@ -135,12 +135,33 @@ function rgbColor(hex) {
 	return result;
 }
 
-// Shape properties with a fill: a color as "RRGGBB", or "" for none
+// A color of the commands: "RRGGBB", or "theme:N", the Nth of the theme's colors (see
+// getThemeColors in colorSchemeCommands), which changes with the document's color scheme
+function ascColor(value) {
+	var theme = /^theme:(\d+)$/.exec(value);
+	if (!theme)
+		return rgbColor(value);
+	var result = new Asc.asc_CColor();
+	result.asc_putType(Asc.c_oAscColor.COLOR_TYPE_SCHEME);
+	result.asc_putValue(parseInt(theme[1], 10));
+	return result;
+}
+
+function hexOfRgb(r, g, b) {
+	return ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1).toUpperCase();
+}
+
+// The standard colors of web-apps' palettes, as "RRGGBB"
+function standardColors() {
+	return AscCommon.g_oStandartColors.map(function (color) { return hexOfRgb(color.R, color.G, color.B); });
+}
+
+// Shape properties with a fill: a color (see ascColor), or "" for none
 function shapeFill(hex) {
 	var fill = new Asc.asc_CShapeFill();
 	if (hex) {
 		var solid = new Asc.asc_CFillSolid();
-		solid.asc_putColor(rgbColor(hex));
+		solid.asc_putColor(ascColor(hex));
 		fill.asc_putType(Asc.c_oAscFill.FILL_TYPE_SOLID);
 		fill.asc_putFill(solid);
 	} else {
@@ -151,12 +172,12 @@ function shapeFill(hex) {
 	return properties;
 }
 
-// Shape properties with an outline: a color as "RRGGBB" ("" for none) and a width in mm
+// Shape properties with an outline: a color (see ascColor; "" for none) and a width in mm
 function shapeOutline(hex, width) {
 	var stroke = new Asc.asc_CStroke();
 	if (hex) {
 		stroke.asc_putType(Asc.c_oAscStrokeType.STROKE_COLOR);
-		stroke.asc_putColor(rgbColor(hex));
+		stroke.asc_putColor(ascColor(hex));
 		stroke.asc_putWidth(width);
 	} else {
 		stroke.asc_putType(Asc.c_oAscStrokeType.STROKE_NONE);
@@ -289,7 +310,7 @@ function uniFillHex(fill) {
 	if (fill.fill.type !== Asc.c_oAscFill.FILL_TYPE_SOLID)
 		return null;
 	var color = fill.getRGBAColor();
-	return ((1 << 24) + (color.R << 16) + (color.G << 8) + color.B).toString(16).slice(1).toUpperCase();
+	return hexOfRgb(color.R, color.G, color.B);
 }
 
 // The fill and outline of the first of the selected drawings ([{drawing}]), as JSON
@@ -847,6 +868,26 @@ function colorSchemeCommands(engine, api, changed) {
 	engine["setColorScheme"] = function (index) {
 		api.asc_ChangeColorSchemeByIdx(index);
 		changed();
+	};
+
+	// The colors of web-apps' palettes: {theme: ["RRGGBB"], standard: ["RRGGBB"]}. theme has 6
+	// for each of the theme's 10 colors (background 1, text 1, background 2, text 2, accents 1 to
+	// 6): the color, then lighter and darker ones; the Nth is "theme:N" in the commands (see
+	// ascColor). sdkjs sends them when the theme's colors change, and again when asked.
+	var themeColors = [];
+	api.asc_registerCallback("asc_onSendThemeColors", function (colors) {
+		themeColors = colors.map(function (color) { return hexOfRgb(color.get_r(), color.get_g(), color.get_b()); });
+	});
+	engine["getThemeColors"] = function () {
+		var drawingDocument = api.WordControl && api.WordControl.m_oDrawingDocument;
+		if (drawingDocument) {
+			drawingDocument.GuiControlColorsMap = null;
+			drawingDocument.CheckGuiControlColors(true);
+		} else {
+			api.GuiControlColorsMap = null;
+			api.asc_CheckGuiControlColors();
+		}
+		return JSON.stringify({ "theme": themeColors, "standard": standardColors() });
 	};
 }
 
@@ -1906,8 +1947,11 @@ window["eoStartEngine"] = function () {
 			result["Strikeout"] = !!textPr.Strikeout;
 			result["VertAlign"] = textPr.VertAlign || 0;
 			var color = textPr.Color;
-			if (textPr.Unifill && textPr.Unifill.fill && textPr.Unifill.fill.color && textPr.Unifill.fill.color.RGBA)
+			if (textPr.Unifill && textPr.Unifill.fill && textPr.Unifill.fill.color) {
+				// Theme colors as the color scheme has them now
+				textPr.Unifill.check(theme, logicDocument.Get_ColorMap());
 				color = textPr.Unifill.fill.color.RGBA;
+			}
 			result["Color"] = hexOf(color);
 			result["Highlight"] = textPr.HighLight && textPr.HighLight !== -1 ? hexOf(textPr.HighLight) : "";
 		}
@@ -1935,10 +1979,10 @@ window["eoStartEngine"] = function () {
 	engine["setStrikeout"] = function (value) { api.put_TextPrStrikeout(value); };
 	// 0 baseline, 1 subscript, 2 superscript
 	engine["setBaseline"] = function (value) { api.put_TextPrBaseline(value); };
-	// "RRGGBB", or "" for automatic
+	// A color (see ascColor), or "" for automatic
 	engine["setTextColor"] = function (hex) {
 		if (hex) {
-			api.put_TextColor(rgbColor(hex));
+			api.put_TextColor(ascColor(hex));
 		} else {
 			var auto = new Asc.asc_CColor();
 			auto.Auto = true;
@@ -3596,8 +3640,9 @@ function spreadsheetEngine(window, api) {
 		lastError = String(e) + (e && e.stack ? "\n" + e.stack : "");
 	};
 
+	// "" for none or automatic
 	function colorHex(color) {
-		if (!color || !color.asc_getR)
+		if (!color || !color.asc_getR || color.asc_getAuto())
 			return "";
 		return [color.asc_getR(), color.asc_getG(), color.asc_getB()].map(function (v) { return ("0" + v.toString(16)).slice(-2); }).join("").toUpperCase();
 	}
@@ -3803,13 +3848,13 @@ function spreadsheetEngine(window, api) {
 	});
 
 	function cellColor(hex) {
-		return hex ? rgbColor(hex) : null;
+		return hex ? ascColor(hex) : null;
 	}
 
 	engine["setFontName"] = edit(function (name) { api.asc_setCellFontName(name); runTimers(200); });
 	engine["setFontSize"] = edit(function (size) { api.asc_setCellFontSize(size); });
 	engine["setStrikeout"] = edit(function (value) { api.asc_setCellStrikeout(value); });
-	engine["setTextColor"] = edit(function (hex) { api.asc_setCellTextColor(hex ? rgbColor(hex) : rgbColor("000000")); });
+	engine["setTextColor"] = edit(function (hex) { api.asc_setCellTextColor(ascColor(hex || "000000")); });
 	engine["setCellFill"] = edit(function (hex) { api.asc_setCellBackgroundColor(cellColor(hex)); });
 	// A number format code ("General", "0.00", "0.00%", "#,##0.00 [$€-407]", "dd.mm.yyyy", "@")
 	engine["setNumberFormat"] = edit(function (format) { api.asc_setCellFormat(format); runTimers(200); });
