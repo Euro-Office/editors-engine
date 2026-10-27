@@ -41,7 +41,12 @@ if(ANDROID OR IOS)
 endif()
 set(CORE_LIBRARY_FILES "")
 foreach(lib ${CORE_LIBRARIES})
-    list(APPEND CORE_LIBRARY_FILES "${CORE_LIBS_PATH}/${CMAKE_SHARED_LIBRARY_PREFIX}${lib}${CMAKE_SHARED_LIBRARY_SUFFIX}")
+    if(IOS)
+        # core's libraries are frameworks on iOS
+        list(APPEND CORE_LIBRARY_FILES "${CORE_LIBS_PATH}/${lib}.framework/${lib}")
+    else()
+        list(APPEND CORE_LIBRARY_FILES "${CORE_LIBS_PATH}/${CMAKE_SHARED_LIBRARY_PREFIX}${lib}${CMAKE_SHARED_LIBRARY_SUFFIX}")
+    endif()
 endforeach()
 
 # Platform defines core's headers expect (core's common.cmake)
