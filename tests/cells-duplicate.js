@@ -20,6 +20,10 @@ t.run("duplicating", function () {
 	t.eq("its cells", cellText(0, 0), "Duplicated");
 	eoEngine.duplicateSheet();
 	t.eq("the next copy's name", sheet()["sheets"][sheet()["active"]]["name"], name + " (3)");
+	// Numbers of more than one digit count up from the original's name too
+	eoEngine.renameSheet(name + " (10)");
+	eoEngine.duplicateSheet();
+	t.eq("the copy of a tenth copy", sheet()["sheets"][sheet()["active"]]["name"], name + " (3)");
 	t.noError("duplicating");
 });
 t.done();

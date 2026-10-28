@@ -5149,7 +5149,7 @@ function spreadsheetEngine(window, api) {
 		for (var i = 0; i < api.asc_getWorksheetsCount(); i++)
 			names.push(api.asc_getWorksheetName(i).toLowerCase());
 		var original = api.asc_getWorksheetName(index);
-		var numbered = /^(.*)\((\d)\)$/.exec(original);
+		var numbered = /^(.*)\((\d+)\)$/.exec(original);
 		var first = numbered ? numbered[1] : original + " ";
 		var name;
 		for (var n = 2; n < 1000; n++) {
