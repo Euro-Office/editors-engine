@@ -1,0 +1,4 @@
+#pragma once
+
+// Generated from engine.js by CMake
+static const char* const kEngineJs = R"EOJS(@ENGINE_JS@)EOJS";

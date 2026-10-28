@@ -1,0 +1,12 @@
+{
+  "name": "eo-coedit-check",
+  "private": true,
+  "description": "Co-editing check: the engine (eo-render, EO_REPL=1) and a web editor edit documents together through a Document Server",
+  "type": "module",
+  "dependencies": {
+    "socket.io-client": "4.8.1"
+  },
+  "devDependencies": {
+    "playwright": "^1.48.2"
+  }
+}
