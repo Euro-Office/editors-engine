@@ -4,6 +4,12 @@ t.run("table", function () {
 	eoEngine.keyDown(35, false, true); // Ctrl+End
 	eoEngine.insertTable(3, 2);
 	t.ok("in the table", t.state()["structure"]["inTable"]);
+	var styles = JSON.parse(eoEngine.previews("tableStyles"));
+	eoEngine.setTableStyle(styles[3].id);
+	var table = t.state()["format"]["Table"];
+	t.eq("its style", table && table["Style"], String(styles[3].id));
+	t.ok("its borders", !!table && "InsideH" in table["Borders"]);
+	t.eq("no fill", table && table["CellFill"], "");
 });
 t.run("statistics", function () {
 	var statistics = JSON.parse(eoEngine.getStatistics());

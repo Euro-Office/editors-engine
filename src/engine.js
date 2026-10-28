@@ -2409,6 +2409,28 @@ window["eoStartEngine"] = function () {
 			var style = styleId && styles.Get(styleId);
 			result["Style"] = style ? style.Get_Name() : "";
 		}
+		var table = selectedElement(Asc.c_oAscTypeSelectElement.Table);
+		if (table)
+			result["Table"] = tableFormat(table);
+		return result;
+	}
+
+	// The table at the cursor or selected: its style (an id of previews("tableStyles")), the
+	// selected cells' fill ("RRGGBB", "" for none, null when they differ) and borders (each
+	// {Color, Width in mm}, null for none or when they differ)
+	function tableFormat(table) {
+		var fill = table.get_CellsBackground();
+		var borders = table.get_CellBorders();
+		var result = {
+			"Style": table.get_TableStyle() !== null && table.get_TableStyle() !== undefined ? String(table.get_TableStyle()) : "",
+			"CellFill": !fill ? null : fill.Value === Asc.c_oAscShdNil ? "" : hexOf(fill.Color),
+			"Borders": {}
+		};
+		["Left", "Top", "Right", "Bottom", "InsideH", "InsideV"].forEach(function (side) {
+			var border = borders && borders[side];
+			result["Borders"][side] = border && border.Value === AscCommonWord.border_Single
+				? { "Color": hexOf(border.Color), "Width": border.Size } : null;
+		});
 		return result;
 	}
 
