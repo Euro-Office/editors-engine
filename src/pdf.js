@@ -284,9 +284,21 @@ recordHitPaths(native_context2d.prototype);
 // and text is drawn by glyph: measured with one font and drawn with another it would be
 // garbled. Pages edited here get the installed font sdkjs took as the same (embeddedFontsMap,
 // see editPage); those edited in the web editor (co-editing) are measured and drawn with it.
+// Other text in such fonts (form fields: the standard fonts of a PDF, "Embedded: Helvetica",
+// which core's reader stands in for) gets the installed font of the same name, as the font
+// index substitutes it; the standard fonts by the names the index knows (Helvetica: Arial,
+// whose metrics Liberation Sans has).
+var STANDARD_FONTS = [[/^(Helv|Arial)/i, "Arial"], [/^Times/i, "Times New Roman"], [/^Cour/i, "Courier New"]];
 function installedFont(name) {
+	var prefix = AscFonts.getEmbeddedFontPrefix();
+	if (typeof name !== "string" || name.indexOf(prefix) !== 0)
+		return name;
 	var map = window["Asc"]["editor"] && window["Asc"]["editor"].embeddedFontsMap;
-	return typeof name === "string" && map && map[name] && name.indexOf(AscFonts.getEmbeddedFontPrefix()) === 0 ? map[name] : name;
+	if (map && map[name])
+		return map[name];
+	name = name.substring(prefix.length);
+	var standard = STANDARD_FONTS.filter(function (font) { return font[0].test(name); })[0];
+	return standard ? standard[1] : name;
 }
 (function () {
 	// The viewer uses these once the file is open (afterOpen)
