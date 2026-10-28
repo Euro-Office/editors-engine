@@ -3997,20 +3997,64 @@ window["eoStartEngine"] = function () {
 		return matrix ? [matrix.TransformPointX(x, y), matrix.TransformPointY(x, y)] : [x, y];
 	}
 
-	// The cursor line ({page, x1, y1, x2, y2}, as the state's cursor) before the character at offset
-	engine["getCaretRect"] = function (offset) {
+	// The cursor lines ({page, x1, y1, x2, y2}, as the state's cursor) before the characters at offsets
+	function caretRects(offsets) {
 		var paragraph = currentParagraph();
 		if (!paragraph)
-			return "null";
+			return null;
+		var text = paragraphText(paragraph);
 		var saved = paragraph.SaveSelectionState();
 		paragraph.RemoveSelection();
-		paragraph.Set_ParaContentPos(positionAt(paragraphText(paragraph), offset), false, -1, -1, true);
-		var caret = paragraph.GetCalculatedCurPosXY();
-		paragraph.LoadSelectionState(saved);
-		var top = transform(caret.Transform, caret.X, caret.Y);
-		var bottom = transform(caret.Transform, caret.X, caret.Y + caret.Height);
-		return JSON.stringify({ "page": isPresentation ? logicDocument.CurPage : caret.PageNum,
-			"x1": top[0], "y1": top[1], "x2": bottom[0], "y2": bottom[1] });
+		try {
+			return offsets.map(function (offset) {
+				paragraph.Set_ParaContentPos(positionAt(text, offset), false, -1, -1, true);
+				var caret = paragraph.GetCalculatedCurPosXY();
+				var top = transform(caret.Transform, caret.X, caret.Y);
+				var bottom = transform(caret.Transform, caret.X, caret.Y + caret.Height);
+				return { "page": isPresentation ? logicDocument.CurPage : caret.PageNum,
+					"x1": top[0], "y1": top[1], "x2": bottom[0], "y2": bottom[1] };
+			});
+		} finally {
+			paragraph.LoadSelectionState(saved);
+		}
+	}
+	engine["getCaretRect"] = function (offset) {
+		var rects = caretRects([offset]);
+		return JSON.stringify(rects ? rects[0] : null);
+	};
+	// getCaretRect for several offsets at once: [{page, x1, y1, x2, y2}], null without a text cursor
+	engine["getCaretRects"] = function (offsets) {
+		return JSON.stringify(caretRects(offsets));
+	};
+
+	// The offset in the current paragraph (as getTextContext's) nearest to a point of a page (mm),
+	// without moving the cursor; points before or after the paragraph's pages give its start or
+	// end. -1 without a text cursor
+	engine["getOffsetAt"] = function (page, x, y) {
+		var paragraph = currentParagraph();
+		if (!paragraph)
+			return -1;
+		var text = paragraphText(paragraph);
+		// Documents: the paragraph's page that is that page; presentations: the shape's text
+		var relativePage = 0;
+		if (!isPresentation) {
+			relativePage = -1;
+			for (var i = 0; i < paragraph.Pages.length && relativePage < 0; i++) {
+				if (paragraph.GetAbsolutePage(i) === page)
+					relativePage = i;
+			}
+			if (relativePage < 0)
+				return page < paragraph.GetAbsolutePage(0) ? 0 : text.text.length;
+		}
+		// Text in shapes is laid out untransformed
+		var matrix = paragraph.Get_ParentTextTransform();
+		if (matrix) {
+			var inverse = AscCommon.global_MatrixTransformer.Invert(matrix);
+			var point = transform(inverse, x, y);
+			x = point[0];
+			y = point[1];
+		}
+		return offsetOf(text, paragraph.getSearchPosByXY(x, y, relativePage, false, false).getPos());
 	};
 
 	// The areas of the text from start to end ([{page, points}], as the state's selection)
