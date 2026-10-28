@@ -725,7 +725,8 @@ function drawListPreview(api, info, type, g, size) {
 }
 
 // Pictures of choices (chart styles, table styles, slide layouts), drawn as pages with negative
-// numbers: previews(kind) lists them as [{id, name, width, height}] (sizes in mm) and
+// numbers: previews(kind) lists them as [{id, name, width, height}] (sizes in mm; ids are strings,
+// numbers as strings for the commands taking numbers: chart styles, layouts, designs) and
 // drawTile(-1 - i, ...) draws the ith (getPageWidth and getPageHeight give its size).
 // kinds: kind -> [{id, name, width, height, draw(graphics)}]. Returns {draw(index, ...), size(index)}
 function previewCommands(engine, resources, kinds) {
@@ -1002,7 +1003,7 @@ function chartCommands(engine, api, options) {
 			var manager = api.chartPreviewManager;
 			return styles.map(function (style, i) {
 				return {
-					id: i + 1, name: String(i + 1), width: 75, height: 75,
+					id: String(i + 1), name: String(i + 1), width: 75, height: 75,
 					draw: function (g) { manager.createChartPreview(g, type, style); }
 				};
 			});
@@ -3624,7 +3625,7 @@ window["eoStartEngine"] = function () {
 		var width = logicDocument.GetWidthMM(), height = logicDocument.GetHeightMM();
 		return (master ? master.sldLayoutLst : all).map(function (layout) {
 			return {
-				id: all.indexOf(layout), name: layout.getName() || "", width: width, height: height,
+				id: String(all.indexOf(layout)), name: layout.getName() || "", width: width, height: height,
 				draw: function (g) {
 					layout.drawNoPlaceholders(g);
 					// The placeholders' frames, without the dates, footers and numbers
@@ -3691,7 +3692,7 @@ window["eoStartEngine"] = function () {
 			var layout = master && (master.sldLayoutLst[0] || null);
 			var width = logicDocument.GetWidthMM(), height = logicDocument.GetHeightMM();
 			return {
-				id: index, name: name, width: width, height: height,
+				id: String(index), name: name, width: width, height: height,
 				draw: function (g) {
 					if (!layout)
 						return;
