@@ -5108,6 +5108,23 @@ function spreadsheetEngine(window, api) {
 	engine["deleteSheet"] = edit(function () { api.asc_deleteWorksheet([api.asc_getActiveWorksheetIndex()]); });
 	// Moves the active sheet to before the sheet at index
 	engine["moveSheet"] = edit(function (index) { api.asc_moveWorksheet(index, [api.asc_getActiveWorksheetIndex()]); });
+	// A copy of the active sheet before it, named as web-apps' "Copy" names it ("Sheet1 (2)"), active
+	engine["duplicateSheet"] = edit(function () {
+		var index = api.asc_getActiveWorksheetIndex();
+		var names = [];
+		for (var i = 0; i < api.asc_getWorksheetsCount(); i++)
+			names.push(api.asc_getWorksheetName(i).toLowerCase());
+		var original = api.asc_getWorksheetName(index);
+		var numbered = /^(.*)\((\d)\)$/.exec(original);
+		var first = numbered ? numbered[1] : original + " ";
+		var name;
+		for (var n = 2; n < 1000; n++) {
+			name = first + "(" + n + ")";
+			if (names.indexOf(name.toLowerCase()) < 0)
+				break;
+		}
+		api.asc_copyWorksheet(index, name);
+	});
 	engine["hideSheet"] = edit(function () { api.asc_hideWorksheet([api.asc_getActiveWorksheetIndex()]); });
 	engine["showSheet"] = edit(function (index) { api.asc_showWorksheet(index); });
 
