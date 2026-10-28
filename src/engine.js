@@ -66,9 +66,19 @@ function drawingFrame(matrix, extX, extY) {
 	return points;
 }
 
+// What a drawing is, for the state's "drawings": picture (also OLE objects), shape (also
+// connectors), chart, table (presentations), group, smartArt, other (slicers, ...)
+var DRAWING_KINDS = {};
+DRAWING_KINDS[AscDFH.historyitem_type_ImageShape] = DRAWING_KINDS[AscDFH.historyitem_type_OleObject] = "picture";
+DRAWING_KINDS[AscDFH.historyitem_type_Shape] = DRAWING_KINDS[AscDFH.historyitem_type_Cnx] = "shape";
+DRAWING_KINDS[AscDFH.historyitem_type_ChartSpace] = "chart";
+DRAWING_KINDS[AscDFH.historyitem_type_GraphicFrame] = "table";
+DRAWING_KINDS[AscDFH.historyitem_type_GroupShape] = "group";
+DRAWING_KINDS[AscDFH.historyitem_type_SmartArt] = "smartArt";
+
 // The state's "drawings": frames of the selected pictures and shapes ([{drawing, page}]) with
-// their rotation handle, or while they are moved, resized or rotated (controller's track
-// objects), where they would go
+// their kind (DRAWING_KINDS) and rotation handle, or while they are moved, resized or rotated
+// (controller's track objects), where they would go
 // onePage: objects stay on the page of the selected ones while they are moved (presentations,
 // whose tracks don't say their slide)
 function drawingStates(selected, controller, onePage) {
@@ -85,6 +95,7 @@ function drawingStates(selected, controller, onePage) {
 	return selected.map(function (item) {
 		var drawing = item.drawing;
 		var result = { "page": item.page, "points": drawingFrame(drawing.transform, drawing.extX, drawing.extY),
+			"kind": DRAWING_KINDS[drawing.getObjectType()] || "other",
 			"canMove": !!(drawing.canMove && drawing.canMove()),
 			"canResize": !!(drawing.canResize && drawing.canResize()) };
 		// Rotation handle above the top edge, where sdkjs looks for it (hitToHandles)
