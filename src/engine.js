@@ -2204,7 +2204,34 @@ window["eoStartEngine"] = function () {
 		logicDocument.OnKeyDown(e);
 	};
 
+	// Typing with a drawing selected (its frame, no text cursor): a shape takes it into its text
+	// (sdkjs adds a text body). Documents: a picture or group has no text, so sdkjs leaves it for
+	// the text next to it on the first letter, which it drops; here the typing goes there whole.
+	// Presentations ignore typing on those, as the web editor does.
+	// Drawings selected in a group are its (selectedDrawings), and sdkjs leaves the group for the text.
+	function leaveDrawingForText() {
+		if (isPresentation)
+			return;
+		var selected = editor.selectedDrawings();
+		if (selected.length === 0)
+			return;
+		var controller = editor.drawingController();
+		var group = controller.selection.groupSelection;
+		if (controller.selection.chartSelection || (group && group.selection.chartSelection))
+			return;
+		var drawing = selected[0].drawing;
+		var type = drawing.getObjectType();
+		if (selected.length === 1 && ((type === AscDFH.historyitem_type_Shape && drawing.canEditText()) || type === AscDFH.historyitem_type_GraphicFrame))
+			return;
+		var parent = (group || drawing).parent;
+		if (parent && parent.GoToText) {
+			parent.GoToText();
+			controller.resetSelection();
+		}
+	}
+
 	engine["enterText"] = function (text) {
+		leaveDrawingForText();
 		api.asc_enterText(text);
 	};
 
@@ -2240,7 +2267,7 @@ window["eoStartEngine"] = function () {
 			engine["setComposingText"](text);
 			engine["finishComposingText"]();
 		} else {
-			api.asc_enterText(text);
+			engine["enterText"](text);
 		}
 	};
 
