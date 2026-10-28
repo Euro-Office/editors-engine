@@ -453,6 +453,19 @@ function pdfEngine(api) {
 	};
 
 	function layout() {
+		// Core's reader gives the sizes of turned pages (/Rotate) turned, the web editor's (WASM)
+		// as in the file: sdkjs turns them. Its objects are placed on the page as in the file.
+		// eoRotate: the rotation core's reader draws a page with
+		viewer.file.pages.forEach(function (info) {
+			if (info.eoRotate !== undefined)
+				return;
+			info.eoRotate = info.originIndex === undefined ? 0 : info.Rotate || 0;
+			if (info.eoRotate % 180) {
+				var width = info.W;
+				info.W = info.H;
+				info.H = width;
+			}
+		});
 		viewer.zoom = VIEWER_ZOOM;
 		viewer.offsetTop = 0;
 		viewer.recalculatePlaces();
@@ -508,6 +521,10 @@ function pdfEngine(api) {
 	};
 	viewer.thumbnails = null;
 	viewer.MouseHandObject = null;
+	// Form fields are filled, as in the web editor's viewer: while sdkjs can edit, its PDF editor
+	// designs them instead (IsEditFieldsMode: taps select and move them, their names are drawn).
+	// Annotations, text boxes, pictures, shapes and pages are edited all the same.
+	api.asc_setRestriction(Asc.c_oAscRestrictionType.OnlyForms);
 	viewer.initPaintDone = true;
 	drawingDocument.CanvasHitContext = createHitContext();
 	AscCommon.CNativeGraphics.prototype.RemoveLastClip = function () { this.RemoveClipRect(); };
@@ -549,10 +566,17 @@ function pdfEngine(api) {
 		return [(invert.TransformPointX(x, y) - origin[0]) / pixelsPerMm(), (invert.TransformPointY(x, y) - origin[1]) / pixelsPerMm()];
 	}
 
-	function pageSize(page) {
+	// A page's rotation, 0, 90, 180 or 270 degrees clockwise: of the file and the editor's
+	// (rotatePage), or only what the editor added (as core's reader draws the page)
+	function rotation(page, added) {
+		var info = viewer.file.pages[page];
+		return info ? ((viewer.getPageRotate(page) - (added ? info.eoRotate || 0 : 0)) % 360 + 360) % 360 : 0;
+	}
+	// The page's size (mm) as drawn, or unrotated (as sdkjs places its objects)
+	function pageSize(page, unrotated) {
 		var info = viewer.file.pages[page];
 		var width = info.W * 25.4 / info.Dpi, height = info.H * 25.4 / info.Dpi;
-		return viewer.getPageRotate(page) & 1 ? [height, width] : [width, height];
+		return !unrotated && rotation(page) % 180 ? [height, width] : [width, height];
 	}
 
 	// ---------------------------------------------------------------------------------
@@ -568,6 +592,10 @@ function pdfEngine(api) {
 		if (page >= 0 && page < viewer.file.pages.length)
 			viewer.currentPage = page;
 	};
+	// Document::RenderTile draws the page from the file and sdkjs' objects unrotated, then turns
+	// them: the page by the rotation the editor added, the objects by all
+	engine["pageRotation"] = function (page) { return rotation(page, true); };
+	engine["objectRotation"] = function (page) { return rotation(page, false); };
 	engine["pageOrigin"] = function (page) {
 		var info = viewer.file.pages[page];
 		return !info || info.originIndex === undefined || info.isRecognized ? -1 : info.originIndex;
@@ -579,9 +607,9 @@ function pdfEngine(api) {
 	};
 
 	// Draws sdkjs' objects over the area (x, y, width, height) of the page rendered at
-	// pageWidth x pageHeight pixels, as CHtmlPage.GetPrintPage does
+	// pageWidth x pageHeight pixels, as CHtmlPage.GetPrintPage does; unrotated (pageRotation)
 	engine["drawTile"] = function (page, pageWidth, pageHeight, x, y, width, height) {
-		var size = pageSize(page);
+		var size = pageSize(page, true);
 		var mmPerPixelX = size[0] / pageWidth;
 		var mmPerPixelY = size[1] / pageHeight;
 		var g = engine["tile"];
@@ -852,6 +880,10 @@ function pdfEngine(api) {
 		var annot = doc.mouseDownAnnot;
 		return {
 			"ink": api.isInkDrawerOn(),
+			// The pen erases ink (startInkEraser)
+			"inkEraser": api.isEraseInkMode(),
+			// The combo box or list box being filled: its options to choose from (selectFieldOption)
+			"field": choiceField(),
 			"annotation": annot ? { "id": annot.GetId(), "type": annot.GetType(), "comment": !!annot.GetContents() } : null,
 			"textSelected": viewer.file.isSelectionUse() && !doc.activeDrawing,
 			// A text box or its text: the text's formatting applies (formatState)
@@ -860,6 +892,24 @@ function pdfEngine(api) {
 			"canEditPage": engine["canEditPage"](viewer.currentPage),
 			// Pictures, shapes or text boxes are selected (not annotations): shapeCommands apply
 			"drawing": selectedShapes().length > 0
+		};
+	}
+
+	function choiceField() {
+		var field = doc.activeForm;
+		var types = AscPDF.FIELD_TYPES;
+		if (!field || field.IsReadOnly() || (field.GetType() !== types.combobox && field.GetType() !== types.listbox))
+			return null;
+		var page = field.GetPage(), rect = field.GetRect();
+		var corner1 = fromPage(page, rect[0], rect[1]), corner2 = fromPage(page, rect[2], rect[3]);
+		var selected = field.GetCurIdxs();
+		return {
+			"id": String(field.GetId()), "type": field.GetType() === types.combobox ? "comboBox" : "listBox", "page": page,
+			"x": Math.min(corner1[0], corner2[0]), "y": Math.min(corner1[1], corner2[1]),
+			"width": Math.abs(corner2[0] - corner1[0]), "height": Math.abs(corner2[1] - corner1[1]),
+			// Options are texts, or [text, export value]
+			"options": field.GetOptions().map(function (option) { return String(Array.isArray(option) ? option[0] : option); }),
+			"selected": Array.isArray(selected) ? selected : [selected]
 		};
 	}
 
@@ -891,6 +941,14 @@ function pdfEngine(api) {
 		global.X = e.X = p[0];
 		global.Y = e.Y = p[1];
 		lastPoint = { page: page, x: x, y: y };
+		if (type === 0 || api.isEraseInkMode()) {
+			// Taps hit ink and shape annotations by their geometry, laid out when they are drawn;
+			// they may not be yet (the eraser right after drawing)
+			(viewer.pagesInfo.pages[page].annots || []).forEach(function (annot) {
+				if (annot.IsShapeBased() && annot.IsNeedRecalc && annot.IsNeedRecalc())
+					annot.Recalculate();
+			});
+		}
 		if (type === 0) {
 			// The page touched is the current one (sdkjs checks its locks, adds text boxes there)
 			viewer.currentPage = page;
@@ -1040,8 +1098,20 @@ function pdfEngine(api) {
 		}
 	};
 
-	engine["undo"] = function () { api.Undo(); allPagesChanged(); };
-	engine["redo"] = function () { api.Redo(); allPagesChanged(); };
+	// Undoing and redoing may add, remove or turn pages
+	function pagesLayout() {
+		// Rotations and the page count
+		return viewer.file.pages.map(function (info) { return info.Rotate; }).join();
+	}
+	function changePages(action) {
+		var before = pagesLayout();
+		action();
+		if (pagesLayout() !== before)
+			layout();
+		allPagesChanged();
+	}
+	engine["undo"] = function () { changePages(function () { api.Undo(); }); };
+	engine["redo"] = function () { changePages(function () { api.Redo(); }); };
 	engine["deleteSelection"] = function () { api.asc_remove(); };
 
 	// ---------------------------------------------------------------------------------
@@ -1068,7 +1138,10 @@ function pdfEngine(api) {
 		stroke.asc_putTransparent(Math.round(255 * (opacity === undefined ? 1 : opacity)));
 		api.asc_StartDrawInk(stroke);
 	};
+	// Stops drawing and erasing
 	engine["stopInk"] = function () { api.asc_StopInkDrawer(); };
+	// Touches erase ink annotations until stopInk
+	engine["startInkEraser"] = function () { api.asc_StartInkEraser(); };
 	// A text box (free text annotation) centered on a point of a page (mm), taking the typing.
 	// sdkjs centers it on the part of the page shown (getViewingRect), here that point; it may
 	// add it later, once its font is loaded
@@ -1192,6 +1265,68 @@ function pdfEngine(api) {
 			doc.private_computeDrawingAddingPos = computePosition;
 			api.ImageLoader.map_image_index[name].Image = { "width": widthPx, "height": heightPx };
 		}
+		state["dirtyPages"][page] = true;
+	};
+
+	// ---------------------------------------------------------------------------------
+	// Form fields: taps fill them (see the restriction in the viewer's setup). A combo box or
+	// list box being filled is in the state (pdf.field); the app shows its options.
+
+	// Chooses the option at index of that field
+	engine["selectFieldOption"] = function (index) {
+		finishComposing();
+		var field = doc.activeForm;
+		if (!field)
+			return;
+		if (field.GetType() === AscPDF.FIELD_TYPES.listbox) {
+			// asc_SelectPDFFormListItem is the web editor's for combo boxes: it would add the
+			// option to those selected
+			doc.DoAction(function () {
+				field.SelectOption(index, !field.IsMultipleSelection());
+			}, AscDFH.historydescription_Pdf_FieldSelectOption, api);
+		} else {
+			api.asc_SelectPDFFormListItem(String(index));
+		}
+		// Chosen from the app's list, so done: stored in the field, as the web editor does after
+		// its list
+		if (field.IsNeedCommit())
+			doc.EnterDownActiveField();
+		state["dirtyPages"][field.GetPage()] = true;
+	};
+
+	// ---------------------------------------------------------------------------------
+	// Pages: a blank page at index (of the size of the page before), deleting a page, turning a
+	// page by angle (90, 180, 270; clockwise). The layout changes (layoutChanged).
+
+	engine["insertPage"] = function (index) {
+		finishComposing();
+		changePages(function () { api.asc_AddPage(index); });
+	};
+	// Not the last page, nor one others lock
+	engine["deletePage"] = function (page) {
+		finishComposing();
+		if (api.asc_CanRemovePages([page]))
+			changePages(function () { api.asc_RemovePage([page]); });
+	};
+	engine["rotatePage"] = function (page, angle) {
+		finishComposing();
+		// It keeps the thumbnails' selection, which the engine has none of
+		viewer.Thumbnails = {};
+		try {
+			changePages(function () { api.asc_RotatePage(angle, [page]); });
+		} finally {
+			viewer.Thumbnails = null;
+		}
+	};
+
+	// A shape (preset name like "rect", "ellipse", "rightArrow", "line") in the middle of the
+	// current page, selected, as in the other editors: added as sdkjs adds one with a tap
+	engine["insertShape"] = function (preset) {
+		finishComposing();
+		var page = Math.max(0, viewer.currentPage), size = pageSize(page);
+		api.StartAddShape(preset, true);
+		engine["mouse"](0, page, size[0] / 2, size[1] / 2, 1, false, false);
+		engine["mouse"](2, page, size[0] / 2, size[1] / 2, 1, false, false);
 		state["dirtyPages"][page] = true;
 	};
 
