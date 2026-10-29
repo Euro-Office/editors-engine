@@ -203,6 +203,42 @@ t.run("all caps and small caps", function () {
 	eoEngine.setSmallCaps(false);
 	t.eq("neither", [t.state().format.Caps, t.state().format.SmallCaps].join(), "false,false");
 });
+t.run("text language", function () {
+	eoEngine.insertTextBox(0, 100, 220);
+	eoEngine.enterText("Bonjour");
+	eoEngine.selectAll();
+	eoEngine.setTextLanguage(1036);
+	t.eq("French", [t.state().format.Lang, t.state().format.LangTag].join(), "1036,fr-FR");
+});
+t.run("document language", function () {
+	eoEngine.setNotes("Notizen");
+	eoEngine.addSlide();
+	eoEngine.insertTextBox(0, 100, 140);
+	eoEngine.enterText("Folie");
+	eoEngine.setDocumentLanguage(1031);
+	t.eq("default", eoEngine.getDocumentLanguage(), 1031);
+	var presentation = editor.WordControl.m_oLogicDocument;
+	var other = 0, runs = 0;
+	function check(shape) {
+		if (shape.spTree)
+			return shape.spTree.forEach(check);
+		var count = function (run) {
+			runs++;
+			if (run.Get_CompiledPr(false).Lang.Val !== 1031)
+				other++;
+		};
+		if (shape.graphicObject && shape.graphicObject.CheckRunContent)
+			shape.graphicObject.CheckRunContent(count);
+		else if (shape.checkRunContent)
+			shape.checkRunContent(count);
+	}
+	for (var i = 0; i < presentation.GetSlidesCount(); i++) {
+		var slide = presentation.GetSlide(i);
+		slide.cSld.spTree.concat(slide.notes ? slide.notes.cSld.spTree : []).forEach(check);
+	}
+	t.ok("text on all slides", runs > 1);
+	t.eq("all text German", other, 0);
+});
 // Draws each preview of a kind into a tile: no exceptions, something drawn
 function drawPreviews(kind) {
 	var items = JSON.parse(eoEngine.previews(kind));
