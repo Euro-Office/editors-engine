@@ -2347,6 +2347,10 @@ window["eoStartEngine"] = function () {
 			}
 			result["Color"] = hexOf(color);
 			result["Highlight"] = textPr.HighLight && textPr.HighLight !== -1 ? hexOf(textPr.HighLight) : "";
+			// The language (LCID, 0 for several) and its tag ("de-DE"), which spell checking goes by
+			var lang = textPr.Lang && textPr.Lang.Val ? textPr.Lang.Val : 0;
+			result["Lang"] = lang;
+			result["LangTag"] = lang && Asc.g_oLcidIdToNameMap[lang] || "";
 		}
 		result["Rtl"] = !!(paraPr && paraPr.Bidi);
 		if (paraPr && paraPr.Spacing) {
@@ -2411,6 +2415,8 @@ window["eoStartEngine"] = function () {
 		else
 			api.put_TextPrSmallCaps(value);
 	};
+	// The text's language (LCID): spell checking checks it with that language's dictionary
+	engine["setTextLanguage"] = function (lcid) { api.put_TextPrLang(lcid); };
 	// 0 baseline, 1 subscript, 2 superscript
 	engine["setBaseline"] = function (value) { api.put_TextPrBaseline(value); };
 	// A color (see ascColor), or "" for automatic

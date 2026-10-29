@@ -203,6 +203,13 @@ t.run("all caps and small caps", function () {
 	eoEngine.setSmallCaps(false);
 	t.eq("neither", [t.state().format.Caps, t.state().format.SmallCaps].join(), "false,false");
 });
+t.run("text language", function () {
+	eoEngine.insertTextBox(0, 100, 220);
+	eoEngine.enterText("Bonjour");
+	eoEngine.selectAll();
+	eoEngine.setTextLanguage(1036);
+	t.eq("French", [t.state().format.Lang, t.state().format.LangTag].join(), "1036,fr-FR");
+});
 // Draws each preview of a kind into a tile: no exceptions, something drawn
 function drawPreviews(kind) {
 	var items = JSON.parse(eoEngine.previews(kind));
