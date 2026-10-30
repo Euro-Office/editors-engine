@@ -1,0 +1,7 @@
+{
+    "tests": ["tests/*", "tools/coedit/*"],
+    "ignore": [
+        "third_party/*", ".docker/*",
+        ".github/*", "*.md", "LICENSE*", ".gitignore", ".gitmodules"
+    ]
+}
