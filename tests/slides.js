@@ -215,7 +215,7 @@ t.run("document language", function () {
 	eoEngine.addSlide();
 	eoEngine.insertTextBox(0, 100, 140);
 	eoEngine.enterText("Folie");
-	eoEngine.setDocumentLanguage(1031);
+	t.eq("applied", eoEngine.setDocumentLanguage(1031), true);
 	t.eq("default", eoEngine.getDocumentLanguage(), 1031);
 	var presentation = editor.WordControl.m_oLogicDocument;
 	var other = 0, runs = 0;

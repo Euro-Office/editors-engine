@@ -50,7 +50,7 @@ t.run("document language", function () {
 	eoEngine.commitText("Kopfzeile ");
 	eoEngine.endHeaderFooter();
 	var before = eoEngine.getDocumentLanguage();
-	eoEngine.setDocumentLanguage(1031);
+	t.eq("applied", eoEngine.setDocumentLanguage(1031), true);
 	t.eq("default", eoEngine.getDocumentLanguage(), 1031);
 	var paragraphs = editor.WordControl.m_oLogicDocument.GetAllParagraphs({ All: true });
 	var text = paragraphs.map(function (paragraph) { return paragraph.GetText(); }).join("|");
@@ -65,6 +65,19 @@ t.run("document language", function () {
 	t.eq("all text German", other, 0);
 	eoEngine.undo();
 	t.eq("undone", eoEngine.getDocumentLanguage(), before);
+});
+t.run("document language locked", function () {
+	// Others edit parts of it (co-editing)
+	var logicDocument = editor.WordControl.m_oLogicDocument;
+	var isLocked = logicDocument.IsSelectionLocked;
+	logicDocument.IsSelectionLocked = function () { return true; };
+	var before = eoEngine.getDocumentLanguage();
+	try {
+		t.eq("refused", eoEngine.setDocumentLanguage(before === 1036 ? 1031 : 1036), false);
+	} finally {
+		logicDocument.IsSelectionLocked = isLocked;
+	}
+	t.eq("unchanged", eoEngine.getDocumentLanguage(), before);
 });
 t.noError("spelling");
 t.done();

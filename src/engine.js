@@ -2419,13 +2419,14 @@ window["eoStartEngine"] = function () {
 	engine["setTextLanguage"] = function (lcid) { api.put_TextPrLang(lcid); };
 	// The document's language (LCID): its default, which new text gets, and the language of all
 	// its text (headers, footnotes, text boxes; in presentations all slides and their notes),
-	// which keeps its own otherwise, as Word sets one on most text
+	// which keeps its own otherwise, as Word sets one on most text. False if others edit parts of it
+	// (co-editing): nothing changed then
 	engine["getDocumentLanguage"] = function () { return logicDocument.GetDefaultLanguage() || 0; };
 	engine["setDocumentLanguage"] = function (lcid) {
 		function setLanguage(run) { run.Set_Lang_Val(lcid); }
 		if (isPresentation) {
 			if (logicDocument.Document_Is_SelectionLocked(AscCommon.changestype_PresDefaultLang))
-				return;
+				return false;
 			logicDocument.StartAction(AscDFH.historydescription_Document_SetDefaultLanguage);
 			logicDocument.SetLanguage(lcid);
 			for (var i = 0; i < logicDocument.GetSlidesCount(); i++) {
@@ -2448,7 +2449,7 @@ window["eoStartEngine"] = function () {
 					Elements: paragraphs,
 					CheckType: AscCommon.changestype_Paragraph_TextProperties
 				}))
-				return;
+				return false;
 			logicDocument.StartAction(AscDFH.historydescription_Document_SetDefaultLanguage);
 			logicDocument.SetDefaultLanguage(lcid);
 			paragraphs.forEach(function (paragraph) { paragraph.CheckRunContent(setLanguage); });
@@ -2457,6 +2458,7 @@ window["eoStartEngine"] = function () {
 		logicDocument.RestartSpellCheck();
 		logicDocument.FinalizeAction();
 		logicDocument.Document_UpdateInterfaceState();
+		return true;
 	};
 	// 0 baseline, 1 subscript, 2 superscript
 	engine["setBaseline"] = function (value) { api.put_TextPrBaseline(value); };
