@@ -239,6 +239,19 @@ t.run("document language", function () {
 	t.ok("text on all slides", runs > 1);
 	t.eq("all text German", other, 0);
 });
+t.run("document language locked", function () {
+	// A shape another participant edits (co-editing)
+	var presentation = editor.WordControl.m_oLogicDocument;
+	var shape = presentation.GetSlide(0).cSld.spTree.find(function (item) { return item.getDocContent && item.getDocContent(); });
+	shape.Lock.Set_Type(AscCommon.c_oAscLockTypes.kLockTypeOther, false);
+	var before = eoEngine.getDocumentLanguage();
+	try {
+		t.eq("refused", eoEngine.setDocumentLanguage(before === 1036 ? 1031 : 1036), false);
+	} finally {
+		shape.Lock.Set_Type(AscCommon.c_oAscLockTypes.kLockTypeNone, false);
+	}
+	t.eq("unchanged", eoEngine.getDocumentLanguage(), before);
+});
 // Draws each preview of a kind into a tile: no exceptions, something drawn
 function drawPreviews(kind) {
 	var items = JSON.parse(eoEngine.previews(kind));

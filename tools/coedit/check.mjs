@@ -255,13 +255,22 @@ async function check(source, path) {
         if (kind === "docx" || kind === "pptx") {
             await web.typeStrict("Strict ");
             const locks = kind === "pptx" ? "Asc.editor.WordControl.m_oLogicDocument.Slides[0].cSld.spTree" : "Asc.editor.WordControl.m_oLogicDocument.Content";
-            await until("the engine sees the web editor's lock", async () => (await engine.run(
+            const othersLock = async () => (await engine.run(
                 `String(${locks}.some(function (item) { var type = item.Lock.Get_Type(); ` +
-                "var types = AscCommon.c_oAscLockTypes; return type !== types.kLockTypeNone && type !== types.kLockTypeMine; }))")) === "true");
+                "var types = AscCommon.c_oAscLockTypes; return type !== types.kLockTypeNone && type !== types.kLockTypeMine; }))")) === "true";
+            await until("the engine sees the web editor's lock", othersLock);
             const locked = await engine.render(0, renderPath);
             debug("red pixels before and with the lock:", red, locked);
             if (locked < red + 10) throw new Error(`the engine doesn't mark the web editor's lock (${red} red pixels before, ${locked} after)`);
+            // The document's language changes all its text: not while the web editor holds a lock;
+            // then on the first try, and the web editor gets it
+            const setLanguage = () => engine.run("String(eoEngine.setDocumentLanguage(1031))");
+            if ((await setLanguage()) !== "false") throw new Error("the engine sets the document's language in spite of the web editor's lock");
             await web.endStrict();
+            await until("the web editor's lock ends", async () => !(await othersLock()));
+            if ((await setLanguage()) !== "true") throw new Error("the engine doesn't set the document's language");
+            await until("the web editor gets the document's language", async () =>
+                (await web.run(() => Asc.editor.WordControl.m_oLogicDocument.GetDefaultLanguage())) === 1031);
         }
 
         // The connection drops: sdkjs reconnects, and when that fails for good it only views

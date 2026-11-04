@@ -2418,37 +2418,35 @@ window["eoStartEngine"] = function () {
 	// The text's language (LCID): spell checking checks it with that language's dictionary
 	engine["setTextLanguage"] = function (lcid) { api.put_TextPrLang(lcid); };
 	// The document's language (LCID): its default, which new text gets, and the language of all
-	// its text (headers, footnotes, text boxes; in presentations all slides and their notes),
-	// which keeps its own otherwise, as Word sets one on most text. False if others edit parts of it
+	// its text (headers, footnotes, text boxes, grouped ones too; in presentations all slides and
+	// their notes), which keeps its own otherwise, as Word sets one on most text. With track
+	// changes on, documents track it as a change of formatting. False if others edit parts of it
 	// (co-editing): nothing changed then
 	engine["getDocumentLanguage"] = function () { return logicDocument.GetDefaultLanguage() || 0; };
 	engine["setDocumentLanguage"] = function (lcid) {
-		function setLanguage(run) { run.Set_Lang_Val(lcid); }
+		var tracking = !isPresentation && logicDocument.IsTrackRevisions();
+		function setLanguage(run) {
+			// As sdkjs' own formatting of text in the document (ApplyTextPr)
+			if (tracking && run.Pr.Lang.Val !== lcid && !run.HavePrChange() && run.Paragraph && run.Paragraph.bFromDocument)
+				run.AddPrChange();
+			run.Set_Lang_Val(lcid);
+		}
 		if (isPresentation) {
-			if (logicDocument.Document_Is_SelectionLocked(AscCommon.changestype_PresDefaultLang))
+			var drawings = presentationTextDrawings();
+			if (presentationLanguageLocked(drawings))
 				return false;
 			logicDocument.StartAction(AscDFH.historydescription_Document_SetDefaultLanguage);
 			logicDocument.SetLanguage(lcid);
-			for (var i = 0; i < logicDocument.GetSlidesCount(); i++) {
-				var slide = logicDocument.GetSlide(i);
-				var shapes = slide.cSld.spTree.concat(slide.notes ? slide.notes.cSld.spTree : []);
-				shapes.forEach(function shapeText(shape) {
-					if (shape.spTree)
-						shape.spTree.forEach(shapeText);
-					else if (shape.graphicObject && shape.graphicObject.CheckRunContent)
-						shape.graphicObject.CheckRunContent(setLanguage);
-					else if (shape.checkRunContent)
-						shape.checkRunContent(setLanguage);
-				});
-			}
+			drawings.forEach(function (item) { drawingRuns(item.drawing, setLanguage); });
 		} else {
-			var paragraphs = logicDocument.GetAllParagraphs({ All: true });
-			if (logicDocument.IsSelectionLocked(AscCommon.changestype_Document_SectPr) ||
-				logicDocument.IsSelectionLocked(AscCommon.changestype_None, {
-					Type: AscCommon.changestype_2_ElementsArray_and_Type,
-					Elements: paragraphs,
-					CheckType: AscCommon.changestype_Paragraph_TextProperties
-				}))
+			var paragraphs = documentParagraphs();
+			// One check: a second one would fail while the server answers the first (sdkjs sets
+			// the global lock meanwhile)
+			if (logicDocument.IsSelectionLocked(AscCommon.changestype_Document_SectPr, {
+				Type: AscCommon.changestype_2_ElementsArray_and_Type,
+				Elements: paragraphs,
+				CheckType: AscCommon.changestype_Paragraph_TextProperties
+			}))
 				return false;
 			logicDocument.StartAction(AscDFH.historydescription_Document_SetDefaultLanguage);
 			logicDocument.SetDefaultLanguage(lcid);
@@ -2460,6 +2458,73 @@ window["eoStartEngine"] = function () {
 		logicDocument.Document_UpdateInterfaceState();
 		return true;
 	};
+	// Documents: all paragraphs, those in grouped shapes and SmartArt too (GetAllParagraphs
+	// doesn't go into groups)
+	function documentParagraphs() {
+		var paragraphs = logicDocument.GetAllParagraphs({ All: true });
+		for (var i = 0; i < paragraphs.length; i++) {
+			paragraphs[i].GetAllDrawingObjects().forEach(function (drawing) {
+				var group = drawing.GraphicObj;
+				if (!group || !group.spTree)
+					return;
+				var contents = [];
+				group.getAllDocContents(contents);
+				contents.forEach(function (content) { content.GetAllParagraphs({ All: true }, paragraphs); });
+			});
+		}
+		return paragraphs;
+	}
+	// Presentations: the runs of a drawing's text (groups, tables, shapes)
+	function drawingRuns(drawing, callback) {
+		if (drawing.spTree)
+			drawing.spTree.forEach(function (child) { drawingRuns(child, callback); });
+		else if (drawing.graphicObject && drawing.graphicObject.CheckRunContent)
+			drawing.graphicObject.CheckRunContent(callback);
+		else if (drawing.checkRunContent)
+			drawing.checkRunContent(callback);
+	}
+	// Presentations: the drawings with text on the slides and their notes, by their main group
+	// (as sdkjs locks them), with the slide's or notes' lock id
+	function presentationTextDrawings() {
+		var drawings = [];
+		for (var i = 0; i < logicDocument.GetSlidesCount(); i++) {
+			var slide = logicDocument.GetSlide(i);
+			[[slide, slide.deleteLock.Get_Id()], [slide.notes, slide.notes && slide.notes.Get_Id()]].forEach(function (page) {
+				if (!page[0])
+					return;
+				page[0].cSld.spTree.forEach(function (drawing) {
+					var hasText = false;
+					drawingRuns(drawing, function () { hasText = true; });
+					if (hasText)
+						drawings.push({ drawing: drawing, slide: slide, pageId: page[1] });
+				});
+			});
+		}
+		return drawings;
+	}
+	// Presentations: one check of the default text style's lock and the drawings' (as sdkjs'
+	// Document_Is_SelectionLocked checks one kind of lock per call)
+	function presentationLanguageLocked(drawings) {
+		var collaborative = AscCommon.CollaborativeEditing;
+		var types = AscCommon.c_oAscLockTypes;
+		if (!logicDocument.CanEdit() || collaborative.Get_GlobalLock())
+			return true;
+		// Slides others hold (deleting or moving them), as sdkjs checks for drawings
+		if (drawings.some(function (item) {
+			var type = item.slide.deleteLock.Lock.Type;
+			return type !== types.kLockTypeMine && type !== types.kLockTypeNone;
+		}))
+			return true;
+		// c_oAscLockTypeElemPresentation (not exported): 1 an object, 2 a slide's part
+		collaborative.OnStart_CheckLock();
+		var style = logicDocument.defaultTextStyleLock;
+		style.Lock.Check({ "type": 2, "val": style.Get_Id(), "guid": style.Get_Id() });
+		drawings.forEach(function (item) {
+			var id = item.drawing.Get_Id();
+			item.drawing.Lock.Check({ "type": 1, "slideId": item.pageId, "objId": id, "guid": id });
+		});
+		return collaborative.OnEnd_CheckLock(false);
+	}
 	// 0 baseline, 1 subscript, 2 superscript
 	engine["setBaseline"] = function (value) { api.put_TextPrBaseline(value); };
 	// A color (see ascColor), or "" for automatic
