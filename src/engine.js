@@ -190,6 +190,14 @@ function shapeOutline(hex, width, dash) {
 	return properties;
 }
 
+// sdkjs' canvas stand-in (common/Native/native.js) makes no gradients, though it has one for them:
+// a gradient fill drawn on it (presentations redraw the master's shapes so when locks change)
+// threw, and stopped sdkjs' handler of others' changes halfway (they weren't applied, and the
+// server then let this side save nothing)
+native_context2d.prototype.createLinearGradient = native_context2d.prototype.createRadialGradient = function () {
+	return new native_gradient_fill();
+};
+
 // sdkjs' print drawing of spreadsheets, which draws sheet tiles, moves what it draws to a
 // printed page's place (its margins, its first cell) with a base transform (SetBaseTransform),
 // which core's graphics haven't. Tiles draw the sheet at its own places: the transform is kept

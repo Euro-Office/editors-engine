@@ -252,6 +252,12 @@ t.run("document language locked", function () {
 	}
 	t.eq("unchanged", eoEngine.getDocumentLanguage(), before);
 });
+t.run("gradients on sdkjs' canvas stand-in", function () {
+	// Gradient fills drawn on it threw (presentations redraw the master's shapes when locks change)
+	var context = new native_context2d({});
+	t.ok("linear", typeof context.createLinearGradient(0, 0, 1, 1).addColorStop === "function");
+	t.ok("radial", typeof context.createRadialGradient(0, 0, 1, 0, 0, 2).addColorStop === "function");
+});
 // Draws each preview of a kind into a tile: no exceptions, something drawn
 function drawPreviews(kind) {
 	var items = JSON.parse(eoEngine.previews(kind));
