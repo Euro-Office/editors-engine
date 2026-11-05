@@ -3890,6 +3890,158 @@ window["eoStartEngine"] = function () {
 		return JSON.stringify(blocks);
 	};
 
+	// The text around the cursor for the system's text input (iOS' UITextInput: autocorrection,
+	// predictions, the loupe and selection handles): the current paragraph's text, offsets in it
+	// in UTF-16 units. Tabs are "\t", line breaks "\n", pictures and other objects U+FFFC, field
+	// codes nothing.
+	// ponytail: the current paragraph only; selections across paragraphs are clamped to it
+	function currentParagraph() {
+		if (editor.selectedDrawings().length > 0)
+			return null;
+		var paragraph = logicDocument.GetCurrentParagraph(false, false);
+		return paragraph && paragraph.IsParagraph && paragraph.IsParagraph() ? paragraph : null;
+	}
+
+	function characterOf(item) {
+		if (item.IsTab && item.IsTab())
+			return "\t";
+		if (item.IsBreak && item.IsBreak())
+			return "\n";
+		// An equation's alignment "&" (CMathAmp) is math text without a code point
+		if (item.GetCodePoint && ((item.IsText && item.IsText()) || (item.IsSpace && item.IsSpace()) || (item.IsMathText && item.IsMathText())))
+			return String.fromCodePoint(item.GetCodePoint());
+		return item.IsFieldChar && (item.IsFieldChar() || item.IsInstrText()) ? "" : "￼";
+	}
+
+	// The paragraph's text and the content position before each of its characters (the last one
+	// is the paragraph's end)
+	function paragraphText(paragraph) {
+		var text = "", offsets = [], positions = [];
+		paragraph.CheckRunContent(function (run, start, end, runPosition) {
+			run.Content.forEach(function (item, index) {
+				var position = runPosition.Copy();
+				position.Update(index, position.Depth);
+				offsets.push(text.length);
+				positions.push(position);
+				if (!item.IsParaEnd())
+					text += characterOf(item);
+			});
+		}, null, null, true);
+		return { text: text, offsets: offsets, positions: positions };
+	}
+
+	function offsetOf(text, position) {
+		for (var i = 0; i < text.positions.length; i++) {
+			if (text.positions[i].Compare(position) >= 0)
+				return text.offsets[i];
+		}
+		return text.text.length;
+	}
+
+	function positionAt(text, offset) {
+		for (var i = 0; i < text.offsets.length; i++) {
+			if (text.offsets[i] >= offset)
+				return text.positions[i];
+		}
+		return text.positions[text.positions.length - 1];
+	}
+
+	// {id, text, start, end} of the current paragraph, the selection's start <= end; null without a text cursor
+	engine["getTextContext"] = function () {
+		var paragraph = currentParagraph();
+		if (!paragraph)
+			return "null";
+		var text = paragraphText(paragraph);
+		var start = text.text.length, end = 0;
+		if (paragraph.IsSelectionUse()) {
+			// A selection that starts or ends in another paragraph covers this one's start or end
+			[paragraph.Get_ParaContentPos(true, true), paragraph.Get_ParaContentPos(true, false)].forEach(function (position) {
+				var offset = offsetOf(text, position);
+				start = Math.min(start, offset);
+				end = Math.max(end, offset);
+			});
+		} else {
+			start = end = offsetOf(text, paragraph.Get_ParaContentPos(false, false));
+		}
+		return JSON.stringify({ "id": paragraph.GetId(), "text": text.text, "start": start, "end": end });
+	};
+
+	function transform(matrix, x, y) {
+		return matrix ? [matrix.TransformPointX(x, y), matrix.TransformPointY(x, y)] : [x, y];
+	}
+
+	// The cursor line ({page, x1, y1, x2, y2}, as the state's cursor) before the character at offset
+	engine["getCaretRect"] = function (offset) {
+		var paragraph = currentParagraph();
+		if (!paragraph)
+			return "null";
+		var saved = paragraph.SaveSelectionState();
+		paragraph.RemoveSelection();
+		paragraph.Set_ParaContentPos(positionAt(paragraphText(paragraph), offset), false, -1, -1, true);
+		var caret = paragraph.GetCalculatedCurPosXY();
+		paragraph.LoadSelectionState(saved);
+		var top = transform(caret.Transform, caret.X, caret.Y);
+		var bottom = transform(caret.Transform, caret.X, caret.Y + caret.Height);
+		return JSON.stringify({ "page": isPresentation ? logicDocument.CurPage : caret.PageNum,
+			"x1": top[0], "y1": top[1], "x2": bottom[0], "y2": bottom[1] });
+	};
+
+	// The areas of the text from start to end ([{page, points}], as the state's selection)
+	engine["getSelectionRects"] = function (start, end) {
+		var paragraph = currentParagraph();
+		if (!paragraph || start >= end)
+			return "[]";
+		var text = paragraphText(paragraph);
+		var saved = paragraph.SaveSelectionState();
+		var selection = state["selection"], textMatrix = drawingDocument.TextMatrix;
+		state["selection"] = [];
+		drawingDocument.TextMatrix = paragraph.Get_ParentTextTransform();
+		selectionPage = isPresentation ? logicDocument.CurPage : null;
+		try {
+			paragraph.RemoveSelection();
+			paragraph.Selection.Use = true;
+			paragraph.Set_SelectionContentPos(positionAt(text, start), positionAt(text, end));
+			for (var page = 0; page < paragraph.Pages.length; page++)
+				paragraph.DrawSelectionOnPage(page);
+			return JSON.stringify(state["selection"]);
+		} finally {
+			paragraph.LoadSelectionState(saved);
+			state["selection"] = selection;
+			drawingDocument.TextMatrix = textMatrix;
+			selectionPage = null;
+		}
+	};
+
+	// Places the cursor (start === end) or selects from start to end in the current paragraph
+	engine["setTextSelection"] = function (start, end) {
+		engine["finishComposingText"]();
+		var paragraph = currentParagraph();
+		if (!paragraph)
+			return;
+		var text = paragraphText(paragraph);
+		paragraph.Parent.RemoveSelection();
+		paragraph.RemoveSelection();
+		if (start === end) {
+			paragraph.Set_ParaContentPos(positionAt(text, start), false, -1, -1, true);
+		} else {
+			paragraph.Selection.Use = true;
+			paragraph.Set_SelectionContentPos(positionAt(text, start), positionAt(text, end));
+		}
+		paragraph.Document_SetThisElementCurrent(true);
+		logicDocument.Document_UpdateSelectionState();
+		logicDocument.Document_UpdateInterfaceState();
+	};
+
+	// Replaces the text from start to end of the current paragraph, as typing over it does
+	// (autocorrection, the keyboard's suggestions)
+	engine["replaceText"] = function (start, end, text) {
+		engine["setTextSelection"](start, end);
+		if (text)
+			api.asc_enterText(text);
+		else if (start !== end)
+			engine["keyDown"](8, false, false);
+	};
+
 	engine["spellState"] = function () {
 		continueSpellCheck();
 		return {
