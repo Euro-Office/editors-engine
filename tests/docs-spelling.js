@@ -72,6 +72,44 @@ t.run("document language locked", function () {
 	}
 	t.eq("unchanged", eoEngine.getDocumentLanguage(), before);
 });
+t.run("document language: what changes", function () {
+	var logicDocument = editor.WordControl.m_oLogicDocument;
+	var types = AscCommon.c_oAscLockTypes;
+	t.eq("no language", eoEngine.setDocumentLanguage(0), false);
+	t.eq("not a language", eoEngine.setDocumentLanguage("de"), false);
+	t.eq("applied", eoEngine.setDocumentLanguage(1031), true);
+	// The language it has already: no change, in spite of others' locks
+	var paragraphs = logicDocument.GetAllParagraphs({ All: true });
+	var steps = logicDocument.History.Points.length;
+	paragraphs[0].Lock.Set_Type(types.kLockTypeOther, false);
+	try {
+		t.eq("nothing to do", eoEngine.setDocumentLanguage(1031), true);
+		t.eq("no undo step", logicDocument.History.Points.length, steps);
+		// Only what changes needs its lock
+		var other = paragraphs[paragraphs.length - 1];
+		other.CheckRunContent(function (run) { run.Set_Lang_Val(1036); });
+		t.eq("others' paragraph stays out", eoEngine.setDocumentLanguage(1031), true);
+		t.eq("the other one changed", otherLanguage([other], 1031), 0);
+	} finally {
+		paragraphs[0].Lock.Set_Type(types.kLockTypeNone, false);
+	}
+});
+t.run("document language: an exception ends the action", function () {
+	var logicDocument = editor.WordControl.m_oLogicDocument;
+	var setLang = AscWord.CRun.prototype.Set_Lang_Val;
+	AscWord.CRun.prototype.Set_Lang_Val = function () { throw new Error("test"); };
+	var thrown = false;
+	try {
+		eoEngine.setDocumentLanguage(1032);
+	} catch (error) {
+		thrown = true;
+	} finally {
+		AscWord.CRun.prototype.Set_Lang_Val = setLang;
+	}
+	t.ok("thrown", thrown);
+	t.eq("action ended", logicDocument.IsActionStarted(), false);
+	t.eq("works again", eoEngine.setDocumentLanguage(1031), true);
+});
 // Every run of [paragraphs] in [lcid]: the count of others
 function otherLanguage(paragraphs, lcid) {
 	var other = 0;

@@ -252,6 +252,44 @@ t.run("document language locked", function () {
 	}
 	t.eq("unchanged", eoEngine.getDocumentLanguage(), before);
 });
+t.run("document language: what changes", function () {
+	var presentation = editor.WordControl.m_oLogicDocument;
+	var types = AscCommon.c_oAscLockTypes;
+	t.eq("no language", eoEngine.setDocumentLanguage(0), false);
+	t.eq("applied", eoEngine.setDocumentLanguage(1031), true);
+	// The language it has already: no change, in spite of others' locks
+	var shapes = presentation.GetSlide(0).cSld.spTree.filter(function (item) { return item.getDocContent && item.getDocContent(); });
+	var style = presentation.defaultTextStyle;
+	var steps = presentation.History.Points.length;
+	shapes[0].Lock.Set_Type(types.kLockTypeOther, false);
+	try {
+		t.eq("nothing to do", eoEngine.setDocumentLanguage(1031), true);
+		t.eq("no undo step", presentation.History.Points.length, steps);
+		t.ok("default text style kept", presentation.defaultTextStyle === style);
+	} finally {
+		shapes[0].Lock.Set_Type(types.kLockTypeNone, false);
+	}
+});
+t.run("document language: an exception ends the action", function () {
+	var presentation = editor.WordControl.m_oLogicDocument;
+	var setLang = AscWord.CRun.prototype.Set_Lang_Val;
+	AscWord.CRun.prototype.Set_Lang_Val = function () { throw new Error("test"); };
+	// Presentations don't tell (IsActionStarted is empty)
+	var finalize = presentation.FinalizeAction, ended = 0;
+	presentation.FinalizeAction = function () { ended++; return finalize.apply(this, arguments); };
+	var thrown = false;
+	try {
+		eoEngine.setDocumentLanguage(1032);
+	} catch (error) {
+		thrown = true;
+	} finally {
+		AscWord.CRun.prototype.Set_Lang_Val = setLang;
+		delete presentation.FinalizeAction;
+	}
+	t.ok("thrown", thrown);
+	t.eq("action ended", ended, 1);
+	t.eq("works again", eoEngine.setDocumentLanguage(1031), true);
+});
 t.run("gradients on sdkjs' canvas stand-in", function () {
 	// Gradient fills drawn on it threw (presentations redraw the master's shapes when locks change)
 	var context = new native_context2d({});
