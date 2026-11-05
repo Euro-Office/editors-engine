@@ -3914,7 +3914,9 @@ function spreadsheetEngine(window, api) {
 	var native = window["native"];
 	var engine = window["eoEngine"] = {};
 	engine["takeImage"] = takeImage;
-	coEditingCommands(engine, api, function () { changed = true; }, true);
+	// Co-editors' changes add no history point: messages count for the sheet's extent instead
+	var coMessages = 0;
+	coEditingCommands(engine, api, function () { changed = true; ++coMessages; }, true);
 	colorSchemeCommands(engine, api, function () { changed = true; });
 	engine["tick"] = runTimers;
 	// Texts sdkjs puts into documents (table of contents, headers, placeholders), by their English text
@@ -3952,11 +3954,23 @@ function spreadsheetEngine(window, api) {
 	var geometry = null;
 	var geometryKey = "";
 	var geometryChanged = true;
+	var content = null, lastContentKey = "";
 
 	function updateGeometry() {
 		var ws = view();
-		var colCount = Math.max(model().getColsCount() + EXTRA_COLS, MIN_COLS);
-		var rowCount = Math.max(model().getRowsCount() + EXTRA_ROWS, MIN_ROWS);
+		// The content's extent (cells, drawings, ...), not the formatted columns and rows: files
+		// from LibreOffice format all of them, which would make a sheet meters wide. Measuring it
+		// reads all cells, so only after changes.
+		var history = AscCommon.History, point = history.Points[history.Index];
+		var contentKey = api.asc_getActiveWorksheetIndex() + ":" + history.Index + ":" + history.Points.length + ":" +
+			(point ? point.Items.length : 0) + ":" + coMessages;
+		if (contentKey !== lastContentKey) {
+			lastContentKey = contentKey;
+			content = ws.getMaxRowColWithData(true);
+		}
+		var active = model().selectionRange.activeCell;
+		var colCount = Math.max(Math.max(content.col, active.col) + 1 + EXTRA_COLS, MIN_COLS);
+		var rowCount = Math.max(Math.max(content.row, active.row) + 1 + EXTRA_ROWS, MIN_ROWS);
 		var left0 = ws._getColLeft(0), top0 = ws._getRowTop(0);
 		var cols = [], rows = [];
 		for (var c = 0; c <= colCount; ++c)
