@@ -25,6 +25,7 @@
 #include <codecvt>
 #include <cwchar>
 #include <cwctype>
+#include <functional>
 #include <locale>
 #include <map>
 #include <string>
@@ -792,24 +793,81 @@ namespace eo
 		return true;
 	}
 
+	// Draws the area (x, y, width, height) of a page of pageWidth x pageHeight pixels turned
+	// clockwise by rotation (0, 90, 180, 270): draw draws the unrotated page's part under it
+	static bool DrawTurned(int rotation, int pageWidth, int pageHeight, int x, int y, int width, int height,
+	                       unsigned char* pixels, const std::function<bool(int, int, int, int, int, int, unsigned char*)>& draw)
+	{
+		if (rotation != 90 && rotation != 180 && rotation != 270)
+			return draw(pageWidth, pageHeight, x, y, width, height, pixels);
+
+		int unrotatedWidth = rotation == 180 ? pageWidth : pageHeight;
+		int unrotatedHeight = rotation == 180 ? pageHeight : pageWidth;
+		int ux = rotation == 90 ? y : rotation == 180 ? unrotatedWidth - x - width : unrotatedWidth - y - height;
+		int uy = rotation == 90 ? unrotatedHeight - x - width : rotation == 180 ? unrotatedHeight - y - height : x;
+		int uw = rotation == 180 ? width : height;
+		int uh = rotation == 180 ? height : width;
+		std::vector<unsigned char> unrotated((size_t)uw * uh * 4);
+		bool drawn = draw(unrotatedWidth, unrotatedHeight, ux, uy, uw, uh, unrotated.data());
+		for (int j = 0; j < height; ++j)
+		{
+			for (int i = 0; i < width; ++i)
+			{
+				int px = x + i, py = y + j;
+				int u = rotation == 90 ? py : rotation == 180 ? unrotatedWidth - 1 - px : unrotatedWidth - 1 - py;
+				int v = rotation == 90 ? unrotatedHeight - 1 - px : rotation == 180 ? unrotatedHeight - 1 - py : px;
+				memcpy(pixels + ((size_t)j * width + i) * 4, unrotated.data() + ((size_t)(v - uy) * uw + (u - ux)) * 4, 4);
+			}
+		}
+		return drawn;
+	}
+
 	bool Document::RenderTile(int page, int pageWidth, int pageHeight,
 	                          int x, int y, int width, int height,
 	                          unsigned char* pixels, bool rgba)
 	{
-		// PDFs: the page from the file (if it has one there); sdkjs draws its objects into a
-		// buffer of their own (doctrenderer's graphics clear the buffer to transparent white),
-		// which goes over the page
-		std::vector<unsigned char> objects;
-		unsigned char* target = pixels;
-		if (m_private->isPdf)
+		if (!m_private->isPdf)
+			return DrawTile(page, pageWidth, pageHeight, x, y, width, height, pixels, rgba);
+
+		// PDFs: the page from the file (if it has one there), which core's reader draws turned as
+		// in the file, turned further as the editor turned it (rotatePage); sdkjs draws its objects
+		// unrotated, into a buffer of their own (doctrenderer's graphics clear the buffer to
+		// transparent white), turned as the page is, over the page
+		std::wstring index = std::to_wstring(page);
+		int origin = (int)m_private->RunNumber(L"eoEngine.pageOrigin(" + index + L")");
+		int pageRotation = (int)m_private->RunNumber(L"eoEngine.pageRotation(" + index + L")");
+		int objectRotation = (int)m_private->RunNumber(L"eoEngine.objectRotation(" + index + L")");
+		DrawTurned(pageRotation, pageWidth, pageHeight, x, y, width, height, pixels,
+			[&](int w, int h, int tx, int ty, int tw, int th, unsigned char* target)
+			{
+				if (origin < 0 || !m_private->pdfPages->RenderTile(origin, w, h, tx, ty, tw, th, target, rgba, false))
+					memset(target, 0xFF, (size_t)tw * th * 4);
+				return true;
+			});
+		std::vector<unsigned char> objects((size_t)width * height * 4);
+		bool drawn = DrawTurned(objectRotation, pageWidth, pageHeight, x, y, width, height, objects.data(),
+			[&](int w, int h, int tx, int ty, int tw, int th, unsigned char* target)
+			{
+				return DrawTile(page, w, h, tx, ty, tw, th, target, rgba);
+			});
+		// The objects over the page, by their opacity (the byte order is the same in both)
+		for (size_t i = 0; i < objects.size(); i += 4)
 		{
-			int origin = (int)m_private->RunNumber(L"eoEngine.pageOrigin(" + std::to_wstring(page) + L")");
-			if (origin < 0 || !m_private->pdfPages->RenderTile(origin, pageWidth, pageHeight, x, y, width, height, pixels, rgba, false))
-				memset(pixels, 0xFF, (size_t)width * height * 4);
-			objects.resize((size_t)width * height * 4);
-			target = objects.data();
+			unsigned int alpha = objects[i + 3];
+			if (alpha == 0)
+				continue;
+			for (size_t c = 0; c < 3; ++c)
+				pixels[i + c] = (unsigned char)((objects[i + c] * alpha + pixels[i + c] * (255 - alpha) + 127) / 255);
 		}
-		if (!m_private->Run(L"eoEngine.beginTile();") || !AttachTile(target, width, height, rgba))
+		return drawn;
+	}
+
+	// sdkjs' drawing of the area: the document's pages, PDFs' objects
+	bool Document::DrawTile(int page, int pageWidth, int pageHeight,
+	                        int x, int y, int width, int height,
+	                        unsigned char* pixels, bool rgba)
+	{
+		if (!m_private->Run(L"eoEngine.beginTile();") || !AttachTile(pixels, width, height, rgba))
 			return false;
 
 		std::wstring draw = L"eoEngine.drawTile(" +
@@ -821,16 +879,7 @@ namespace eo
 		if (drawn && m_private->RunNumber(L"window.eoImages ? 1 : 0") == 1)
 		{
 			WriteImages();
-			drawn = m_private->Run(L"eoEngine.beginTile();") && AttachTile(target, width, height, rgba) && m_private->Run(draw);
-		}
-		// The objects over the page, by their opacity (the byte order is the same in both)
-		for (size_t i = 0; i < objects.size(); i += 4)
-		{
-			unsigned int alpha = objects[i + 3];
-			if (alpha == 0)
-				continue;
-			for (size_t c = 0; c < 3; ++c)
-				pixels[i + c] = (unsigned char)((objects[i + c] * alpha + pixels[i + c] * (255 - alpha) + 127) / 255);
+			drawn = m_private->Run(L"eoEngine.beginTile();") && AttachTile(pixels, width, height, rgba) && m_private->Run(draw);
 		}
 		return drawn;
 	}
