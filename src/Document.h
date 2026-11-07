@@ -86,6 +86,8 @@ namespace eo
 		void ReopenPdf();
 		void WriteImages();
 		bool AttachTile(unsigned char* pixels, int width, int height, bool rgba);
+		bool DrawTile(int page, int pageWidth, int pageHeight, int x, int y, int width, int height,
+		              unsigned char* pixels, bool rgba);
 		bool ReplacePdfReader(const std::wstring& path);
 		int Decrypt(const std::wstring& path, const std::wstring& tempDir, const std::wstring& password, std::wstring& target);
 
