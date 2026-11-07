@@ -432,6 +432,21 @@ function pdfEngine(api) {
 		if (!drawingDocument[name])
 			drawingDocument[name] = function () {};
 	});
+	// A field's fonts load at once here (the font loader reads files), but sdkjs answers "not
+	// loaded" and relies on the callback to do it again: getTextController has none, so the
+	// letter typed after a drawing asked for more fonts was dropped. Loaded is loaded.
+	var checkFieldFont = doc.checkFieldFont;
+	doc.checkFieldFont = function (field, callback) {
+		var loading = true, loadedNow = false;
+		var loaded = checkFieldFont.call(this, field, function () {
+			if (loading)
+				loadedNow = true;
+			else if (callback)
+				callback();
+		});
+		loading = false;
+		return loaded || loadedNow;
+	};
 	var native = window["native"];
 	var engine = window["eoEngine"] = {};
 	// What the app opened: sdkjs' PDF editor (EditorDocument.isPdf)
