@@ -203,6 +203,99 @@ t.run("all caps and small caps", function () {
 	eoEngine.setSmallCaps(false);
 	t.eq("neither", [t.state().format.Caps, t.state().format.SmallCaps].join(), "false,false");
 });
+t.run("text language", function () {
+	eoEngine.insertTextBox(0, 100, 220);
+	eoEngine.enterText("Bonjour");
+	eoEngine.selectAll();
+	eoEngine.setTextLanguage(1036);
+	t.eq("French", [t.state().format.Lang, t.state().format.LangTag].join(), "1036,fr-FR");
+});
+t.run("document language", function () {
+	eoEngine.setNotes("Notizen");
+	eoEngine.addSlide();
+	eoEngine.insertTextBox(0, 100, 140);
+	eoEngine.enterText("Folie");
+	t.eq("applied", eoEngine.setDocumentLanguage(1031), true);
+	t.eq("default", eoEngine.getDocumentLanguage(), 1031);
+	var presentation = editor.WordControl.m_oLogicDocument;
+	var other = 0, runs = 0;
+	function check(shape) {
+		if (shape.spTree)
+			return shape.spTree.forEach(check);
+		var count = function (run) {
+			runs++;
+			if (run.Get_CompiledPr(false).Lang.Val !== 1031)
+				other++;
+		};
+		if (shape.graphicObject && shape.graphicObject.CheckRunContent)
+			shape.graphicObject.CheckRunContent(count);
+		else if (shape.checkRunContent)
+			shape.checkRunContent(count);
+	}
+	for (var i = 0; i < presentation.GetSlidesCount(); i++) {
+		var slide = presentation.GetSlide(i);
+		slide.cSld.spTree.concat(slide.notes ? slide.notes.cSld.spTree : []).forEach(check);
+	}
+	t.ok("text on all slides", runs > 1);
+	t.eq("all text German", other, 0);
+});
+t.run("document language locked", function () {
+	// A shape another participant edits (co-editing)
+	var presentation = editor.WordControl.m_oLogicDocument;
+	var shape = presentation.GetSlide(0).cSld.spTree.find(function (item) { return item.getDocContent && item.getDocContent(); });
+	shape.Lock.Set_Type(AscCommon.c_oAscLockTypes.kLockTypeOther, false);
+	var before = eoEngine.getDocumentLanguage();
+	try {
+		t.eq("refused", eoEngine.setDocumentLanguage(before === 1036 ? 1031 : 1036), false);
+	} finally {
+		shape.Lock.Set_Type(AscCommon.c_oAscLockTypes.kLockTypeNone, false);
+	}
+	t.eq("unchanged", eoEngine.getDocumentLanguage(), before);
+});
+t.run("document language: what changes", function () {
+	var presentation = editor.WordControl.m_oLogicDocument;
+	var types = AscCommon.c_oAscLockTypes;
+	t.eq("no language", eoEngine.setDocumentLanguage(0), false);
+	t.eq("applied", eoEngine.setDocumentLanguage(1031), true);
+	// The language it has already: no change, in spite of others' locks
+	var shapes = presentation.GetSlide(0).cSld.spTree.filter(function (item) { return item.getDocContent && item.getDocContent(); });
+	var style = presentation.defaultTextStyle;
+	var steps = presentation.History.Points.length;
+	shapes[0].Lock.Set_Type(types.kLockTypeOther, false);
+	try {
+		t.eq("nothing to do", eoEngine.setDocumentLanguage(1031), true);
+		t.eq("no undo step", presentation.History.Points.length, steps);
+		t.ok("default text style kept", presentation.defaultTextStyle === style);
+	} finally {
+		shapes[0].Lock.Set_Type(types.kLockTypeNone, false);
+	}
+});
+t.run("document language: an exception ends the action", function () {
+	var presentation = editor.WordControl.m_oLogicDocument;
+	var setLang = AscWord.CRun.prototype.Set_Lang_Val;
+	AscWord.CRun.prototype.Set_Lang_Val = function () { throw new Error("test"); };
+	// Presentations don't tell (IsActionStarted is empty)
+	var finalize = presentation.FinalizeAction, ended = 0;
+	presentation.FinalizeAction = function () { ended++; return finalize.apply(this, arguments); };
+	var thrown = false;
+	try {
+		eoEngine.setDocumentLanguage(1032);
+	} catch (error) {
+		thrown = true;
+	} finally {
+		AscWord.CRun.prototype.Set_Lang_Val = setLang;
+		delete presentation.FinalizeAction;
+	}
+	t.ok("thrown", thrown);
+	t.eq("action ended", ended, 1);
+	t.eq("works again", eoEngine.setDocumentLanguage(1031), true);
+});
+t.run("gradients on sdkjs' canvas stand-in", function () {
+	// Gradient fills drawn on it threw (presentations redraw the master's shapes when locks change)
+	var context = new native_context2d({});
+	t.ok("linear", typeof context.createLinearGradient(0, 0, 1, 1).addColorStop === "function");
+	t.ok("radial", typeof context.createRadialGradient(0, 0, 1, 0, 0, 2).addColorStop === "function");
+});
 // Draws each preview of a kind into a tile: no exceptions, something drawn
 function drawPreviews(kind) {
 	var items = JSON.parse(eoEngine.previews(kind));
