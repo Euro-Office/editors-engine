@@ -41,7 +41,6 @@ FROM core-host AS engine-host
             --allfonts=${RUNTIME}/fonts/AllFonts.js --selection=${RUNTIME}/fonts/font_selection.bin && \
         printf '%s\n' '<Settings>' \
             '<file>./sdkjs/common/Native/native.js</file>' \
-            '<file>./sdkjs/common/Native/jquery_native.js</file>' \
             '<file>./sdkjs/vendor/xregexp-all-min.js</file>' \
             '<allfonts>./fonts/AllFonts.js</allfonts>' \
             '<sdkjs>./sdkjs</sdkjs>' \
