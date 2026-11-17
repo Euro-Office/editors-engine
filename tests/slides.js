@@ -64,7 +64,9 @@ t.run("titles a chart, reads its colors", function () {
 t.run("styles and lays out a chart, sets its axes", function () {
 	var chart = eoEngine.chartState();
 	t.ok("styles of its type", chart.styles > 1);
-	t.eq("previews of them", JSON.parse(eoEngine.previews("chartStyles")).length, chart.styles);
+	var chartStyles = JSON.parse(eoEngine.previews("chartStyles"));
+	t.eq("previews of them", chartStyles.length, chart.styles);
+	t.eq("by the style's number", chartStyles[2].id, "3");
 	eoEngine.setChartStyle(3);
 	t.eq("style", eoEngine.chartState().style, 3);
 	eoEngine.setChartLayout({ "legend": Asc.c_oAscChartLegendShowSettings.top, "verticalTitle": Asc.c_oAscChartVertAxisLabelShowSettings.horizontal,
@@ -86,6 +88,8 @@ t.run("styles and lays out a chart, sets its axes", function () {
 t.run("slide layouts, table styles and the background", function () {
 	var layouts = JSON.parse(eoEngine.previews("layouts"));
 	t.eq("a picture per layout", layouts.length, JSON.parse(eoEngine.getLayouts()).length);
+	t.eq("by the layout's index", layouts.map(function (layout) { return layout.id; }).join(),
+		JSON.parse(eoEngine.getLayouts()).map(function (layout) { return String(layout.index); }).join());
 	var styles = JSON.parse(eoEngine.previews("tableStyles"));
 	t.ok("table styles", styles.length > 10);
 	click(0, 5, 5);
@@ -105,6 +109,7 @@ t.run("designs", function () {
 	var designs = JSON.parse(eoEngine.previews("themes"));
 	t.ok("designs prepared", designs.length > 5);
 	t.eq("by their names", designs[4].name, "Green leaf");
+	t.eq("ids as the other previews'", designs[4].id, "4");
 	var masters = Asc.editor.WordControl.m_oLogicDocument.slideMasters.length;
 	eoEngine.setTheme(4);
 	var presentation = Asc.editor.WordControl.m_oLogicDocument;

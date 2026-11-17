@@ -16,6 +16,10 @@ t.run("a text box's paragraph", function () {
 	var cursor = t.state().cursor;
 	var caret = JSON.parse(eoEngine.getCaretRect(4));
 	t.ok("the cursor's place", caret.page === 1 && Math.abs(caret.x1 - cursor.x1) < 0.01 && Math.abs(caret.y2 - cursor.y2) < 0.01);
+	var lines = JSON.parse(eoEngine.getCaretRects([0, 4]));
+	t.eq("the offsets at their cursor lines", lines.map(function (line) {
+		return eoEngine.getOffsetAt(line.page, line.x1 + 0.1, (line.y1 + line.y2) / 2);
+	}).join(), "0,4");
 	eoEngine.replaceText(0, 3, "Three");
 	t.eq("replaced", context().text, "Three two");
 });

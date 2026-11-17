@@ -4,6 +4,7 @@
 # eoengine target (add_subdirectory, then target_sources):
 #
 #   Android: editors-android's libeditors (JNI), with the core-android libraries
+#   iOS: editors-ios (Objective-C++), with core built for iOS
 #   Desktop: cmake -S editors-engine -B build -DCORE_SOURCE_DIR=... -DCORE_LIBS_DIR=... -DEO_ENGINE_TOOLS=ON
 cmake_minimum_required(VERSION 3.22)
 project(eo_editors_engine CXX)
@@ -33,14 +34,29 @@ if(ANDROID)
     set(CORE_LIBS_PATH "${CORE_LIBS_DIR}/${ANDROID_ABI}")
 endif()
 set(CORE_LIBRARIES doctrenderer graphics kernel UnicodeConverter PdfFile XpsFile DjVuFile)
-if(ANDROID)
-    # X2T_Convert, for converting in-process (see Document.cpp)
+# Mobile apps can't start the x2t executable: X2T_Convert converts in-process (see Document.cpp)
+if(ANDROID OR IOS)
+    set(EO_X2T_IN_PROCESS ON)
     list(APPEND CORE_LIBRARIES x2t)
 endif()
 set(CORE_LIBRARY_FILES "")
 foreach(lib ${CORE_LIBRARIES})
-    list(APPEND CORE_LIBRARY_FILES "${CORE_LIBS_PATH}/lib${lib}.so")
+    if(IOS)
+        # core's libraries are frameworks on iOS
+        list(APPEND CORE_LIBRARY_FILES "${CORE_LIBS_PATH}/${lib}.framework/${lib}")
+    else()
+        list(APPEND CORE_LIBRARY_FILES "${CORE_LIBS_PATH}/${CMAKE_SHARED_LIBRARY_PREFIX}${lib}${CMAKE_SHARED_LIBRARY_SUFFIX}")
+    endif()
 endforeach()
+
+# Platform defines core's headers expect (core's common.cmake)
+set(CORE_DEFINES LINUX _LINUX)
+if(APPLE)
+    list(APPEND CORE_DEFINES _MAC)
+    set(EO_RPATH "@loader_path")
+else()
+    set(EO_RPATH "\$ORIGIN")
+endif()
 
 # Hunspell for spell checking (third_party/hunspell, a submodule at the commit core uses)
 set(HUNSPELL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/hunspell/src/hunspell")
@@ -59,15 +75,19 @@ target_include_directories(eoengine
     PUBLIC src
     PRIVATE "${CORE_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}"
 )
-# Platform defines core's headers expect
-target_compile_definitions(eoengine PRIVATE LINUX _LINUX)
+target_compile_definitions(eoengine PRIVATE ${CORE_DEFINES})
+if(EO_X2T_IN_PROCESS)
+    target_compile_definitions(eoengine PRIVATE EO_X2T_IN_PROCESS)
+endif()
 target_link_libraries(eoengine PRIVATE ${CORE_LIBRARY_FILES} hunspell)
-set_target_properties(eoengine PROPERTIES BUILD_RPATH "\$ORIGIN" INSTALL_RPATH "\$ORIGIN")
+set_target_properties(eoengine PROPERTIES BUILD_RPATH "${EO_RPATH}" INSTALL_RPATH "${EO_RPATH}")
 
 if(EO_ENGINE_TOOLS)
     add_executable(eo-render tools/render.cpp)
     target_include_directories(eo-render PRIVATE "${CORE_SOURCE_DIR}")
-    target_compile_definitions(eo-render PRIVATE LINUX _LINUX)
-    target_link_libraries(eo-render PRIVATE eoengine "${CORE_LIBS_PATH}/libgraphics.so" "${CORE_LIBS_PATH}/libkernel.so")
-    set_target_properties(eo-render PROPERTIES BUILD_RPATH "\$ORIGIN")
+    target_compile_definitions(eo-render PRIVATE ${CORE_DEFINES})
+    target_link_libraries(eo-render PRIVATE eoengine
+        "${CORE_LIBS_PATH}/${CMAKE_SHARED_LIBRARY_PREFIX}graphics${CMAKE_SHARED_LIBRARY_SUFFIX}"
+        "${CORE_LIBS_PATH}/${CMAKE_SHARED_LIBRARY_PREFIX}kernel${CMAKE_SHARED_LIBRARY_SUFFIX}")
+    set_target_properties(eo-render PROPERTIES BUILD_RPATH "${EO_RPATH}")
 endif()

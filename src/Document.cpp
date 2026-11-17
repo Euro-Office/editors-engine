@@ -35,12 +35,13 @@
 #include <android/log.h>
 #else
 #include <iostream>
-#include <sys/wait.h>
 #endif
 
-#ifdef __ANDROID__
-// x2t built as a library (core's x2tlib, libx2t.so)
+#ifdef EO_X2T_IN_PROCESS
+// x2t built as a library (core's x2tlib)
 extern "C" int X2T_Convert(int argc, char* argv[]);
+#else
+#include <sys/wait.h>
 #endif
 
 using NSDoctRenderer::CDocBuilder;
@@ -76,8 +77,8 @@ namespace eo
 		NSFonts::IApplicationFonts* g_fonts = nullptr;
 		std::wstring g_runtimeDir;
 
-#ifdef __ANDROID__
-		// docbuilder starts the x2t executable to convert; Android apps can't, so run x2t in-process
+#ifdef EO_X2T_IN_PROCESS
+		// docbuilder starts the x2t executable to convert; mobile apps can't, so run x2t in-process
 		int ConvertWithX2t(const wchar_t* paramsPath)
 		{
 			std::string path = std::wstring_convert<std::codecvt_utf8<wchar_t>>().to_bytes(paramsPath);
@@ -90,7 +91,7 @@ namespace eo
 		// Runs x2t with a task file, as docbuilder does
 		int RunX2t(const std::wstring& paramsPath)
 		{
-#ifdef __ANDROID__
+#ifdef EO_X2T_IN_PROCESS
 			return ConvertWithX2t(paramsPath.c_str());
 #else
 			std::string command = "\"" + std::wstring_convert<std::codecvt_utf8<wchar_t>>().to_bytes(g_runtimeDir + L"/x2t") +
@@ -210,7 +211,7 @@ namespace eo
 		Timer timer;
 		CDocBuilder::Initialize(runtimeDir.c_str());
 		g_runtimeDir = runtimeDir;
-#ifdef __ANDROID__
+#ifdef EO_X2T_IN_PROCESS
 		CDocBuilder::SetX2tConverter(&ConvertWithX2t);
 #endif
 		timer.Log("start V8");

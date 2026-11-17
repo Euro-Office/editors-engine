@@ -66,9 +66,19 @@ function drawingFrame(matrix, extX, extY) {
 	return points;
 }
 
+// What a drawing is, for the state's "drawings": picture (also OLE objects), shape (also
+// connectors), chart, table (presentations), group, smartArt, other (slicers, ...)
+var DRAWING_KINDS = {};
+DRAWING_KINDS[AscDFH.historyitem_type_ImageShape] = DRAWING_KINDS[AscDFH.historyitem_type_OleObject] = "picture";
+DRAWING_KINDS[AscDFH.historyitem_type_Shape] = DRAWING_KINDS[AscDFH.historyitem_type_Cnx] = "shape";
+DRAWING_KINDS[AscDFH.historyitem_type_ChartSpace] = "chart";
+DRAWING_KINDS[AscDFH.historyitem_type_GraphicFrame] = "table";
+DRAWING_KINDS[AscDFH.historyitem_type_GroupShape] = "group";
+DRAWING_KINDS[AscDFH.historyitem_type_SmartArt] = "smartArt";
+
 // The state's "drawings": frames of the selected pictures and shapes ([{drawing, page}]) with
-// their rotation handle, or while they are moved, resized or rotated (controller's track
-// objects), where they would go
+// their kind (DRAWING_KINDS) and rotation handle, or while they are moved, resized or rotated
+// (controller's track objects), where they would go
 // onePage: objects stay on the page of the selected ones while they are moved (presentations,
 // whose tracks don't say their slide)
 function drawingStates(selected, controller, onePage) {
@@ -85,6 +95,7 @@ function drawingStates(selected, controller, onePage) {
 	return selected.map(function (item) {
 		var drawing = item.drawing;
 		var result = { "page": item.page, "points": drawingFrame(drawing.transform, drawing.extX, drawing.extY),
+			"kind": DRAWING_KINDS[drawing.getObjectType()] || "other",
 			"canMove": !!(drawing.canMove && drawing.canMove()),
 			"canResize": !!(drawing.canResize && drawing.canResize()) };
 		// Rotation handle above the top edge, where sdkjs looks for it (hitToHandles)
@@ -714,7 +725,8 @@ function drawListPreview(api, info, type, g, size) {
 }
 
 // Pictures of choices (chart styles, table styles, slide layouts), drawn as pages with negative
-// numbers: previews(kind) lists them as [{id, name, width, height}] (sizes in mm) and
+// numbers: previews(kind) lists them as [{id, name, width, height}] (sizes in mm; ids are strings,
+// numbers as strings for the commands taking numbers: chart styles, layouts, designs) and
 // drawTile(-1 - i, ...) draws the ith (getPageWidth and getPageHeight give its size).
 // kinds: kind -> [{id, name, width, height, draw(graphics)}]. Returns {draw(index, ...), size(index)}
 function previewCommands(engine, resources, kinds) {
@@ -991,7 +1003,7 @@ function chartCommands(engine, api, options) {
 			var manager = api.chartPreviewManager;
 			return styles.map(function (style, i) {
 				return {
-					id: i + 1, name: String(i + 1), width: 75, height: 75,
+					id: String(i + 1), name: String(i + 1), width: 75, height: 75,
 					draw: function (g) { manager.createChartPreview(g, type, style); }
 				};
 			});
@@ -2409,6 +2421,28 @@ window["eoStartEngine"] = function () {
 			var style = styleId && styles.Get(styleId);
 			result["Style"] = style ? style.Get_Name() : "";
 		}
+		var table = selectedElement(Asc.c_oAscTypeSelectElement.Table);
+		if (table)
+			result["Table"] = tableFormat(table);
+		return result;
+	}
+
+	// The table at the cursor or selected: its style (an id of previews("tableStyles")), the
+	// selected cells' fill ("RRGGBB", "" for none, null when they differ) and borders (each
+	// {Color, Width in mm}, null for none or when they differ)
+	function tableFormat(table) {
+		var fill = table.get_CellsBackground();
+		var borders = table.get_CellBorders();
+		var result = {
+			"Style": table.get_TableStyle() !== null && table.get_TableStyle() !== undefined ? String(table.get_TableStyle()) : "",
+			"CellFill": !fill ? null : fill.Value === Asc.c_oAscShdNil ? "" : hexOf(fill.Color),
+			"Borders": {}
+		};
+		["Left", "Top", "Right", "Bottom", "InsideH", "InsideV"].forEach(function (side) {
+			var border = borders && borders[side];
+			result["Borders"][side] = border && border.Value === AscCommonWord.border_Single
+				? { "Color": hexOf(border.Color), "Width": border.Size } : null;
+		});
 		return result;
 	}
 
@@ -3591,7 +3625,7 @@ window["eoStartEngine"] = function () {
 		var width = logicDocument.GetWidthMM(), height = logicDocument.GetHeightMM();
 		return (master ? master.sldLayoutLst : all).map(function (layout) {
 			return {
-				id: all.indexOf(layout), name: layout.getName() || "", width: width, height: height,
+				id: String(all.indexOf(layout)), name: layout.getName() || "", width: width, height: height,
 				draw: function (g) {
 					layout.drawNoPlaceholders(g);
 					// The placeholders' frames, without the dates, footers and numbers
@@ -3658,7 +3692,7 @@ window["eoStartEngine"] = function () {
 			var layout = master && (master.sldLayoutLst[0] || null);
 			var width = logicDocument.GetWidthMM(), height = logicDocument.GetHeightMM();
 			return {
-				id: index, name: name, width: width, height: height,
+				id: String(index), name: name, width: width, height: height,
 				draw: function (g) {
 					if (!layout)
 						return;
@@ -3997,20 +4031,64 @@ window["eoStartEngine"] = function () {
 		return matrix ? [matrix.TransformPointX(x, y), matrix.TransformPointY(x, y)] : [x, y];
 	}
 
-	// The cursor line ({page, x1, y1, x2, y2}, as the state's cursor) before the character at offset
-	engine["getCaretRect"] = function (offset) {
+	// The cursor lines ({page, x1, y1, x2, y2}, as the state's cursor) before the characters at offsets
+	function caretRects(offsets) {
 		var paragraph = currentParagraph();
 		if (!paragraph)
-			return "null";
+			return null;
+		var text = paragraphText(paragraph);
 		var saved = paragraph.SaveSelectionState();
 		paragraph.RemoveSelection();
-		paragraph.Set_ParaContentPos(positionAt(paragraphText(paragraph), offset), false, -1, -1, true);
-		var caret = paragraph.GetCalculatedCurPosXY();
-		paragraph.LoadSelectionState(saved);
-		var top = transform(caret.Transform, caret.X, caret.Y);
-		var bottom = transform(caret.Transform, caret.X, caret.Y + caret.Height);
-		return JSON.stringify({ "page": isPresentation ? logicDocument.CurPage : caret.PageNum,
-			"x1": top[0], "y1": top[1], "x2": bottom[0], "y2": bottom[1] });
+		try {
+			return offsets.map(function (offset) {
+				paragraph.Set_ParaContentPos(positionAt(text, offset), false, -1, -1, true);
+				var caret = paragraph.GetCalculatedCurPosXY();
+				var top = transform(caret.Transform, caret.X, caret.Y);
+				var bottom = transform(caret.Transform, caret.X, caret.Y + caret.Height);
+				return { "page": isPresentation ? logicDocument.CurPage : caret.PageNum,
+					"x1": top[0], "y1": top[1], "x2": bottom[0], "y2": bottom[1] };
+			});
+		} finally {
+			paragraph.LoadSelectionState(saved);
+		}
+	}
+	engine["getCaretRect"] = function (offset) {
+		var rects = caretRects([offset]);
+		return JSON.stringify(rects ? rects[0] : null);
+	};
+	// getCaretRect for several offsets at once: [{page, x1, y1, x2, y2}], null without a text cursor
+	engine["getCaretRects"] = function (offsets) {
+		return JSON.stringify(caretRects(offsets));
+	};
+
+	// The offset in the current paragraph (as getTextContext's) nearest to a point of a page (mm),
+	// without moving the cursor; points before or after the paragraph's pages give its start or
+	// end. -1 without a text cursor
+	engine["getOffsetAt"] = function (page, x, y) {
+		var paragraph = currentParagraph();
+		if (!paragraph)
+			return -1;
+		var text = paragraphText(paragraph);
+		// Documents: the paragraph's page that is that page; presentations: the shape's text
+		var relativePage = 0;
+		if (!isPresentation) {
+			relativePage = -1;
+			for (var i = 0; i < paragraph.Pages.length && relativePage < 0; i++) {
+				if (paragraph.GetAbsolutePage(i) === page)
+					relativePage = i;
+			}
+			if (relativePage < 0)
+				return page < paragraph.GetAbsolutePage(0) ? 0 : text.text.length;
+		}
+		// Text in shapes is laid out untransformed
+		var matrix = paragraph.Get_ParentTextTransform();
+		if (matrix) {
+			var inverse = AscCommon.global_MatrixTransformer.Invert(matrix);
+			var point = transform(inverse, x, y);
+			x = point[0];
+			y = point[1];
+		}
+		return offsetOf(text, paragraph.getSearchPosByXY(x, y, relativePage, false, false).getPos());
 	};
 
 	// The areas of the text from start to end ([{page, points}], as the state's selection)
@@ -5064,6 +5142,23 @@ function spreadsheetEngine(window, api) {
 	engine["deleteSheet"] = edit(function () { api.asc_deleteWorksheet([api.asc_getActiveWorksheetIndex()]); });
 	// Moves the active sheet to before the sheet at index
 	engine["moveSheet"] = edit(function (index) { api.asc_moveWorksheet(index, [api.asc_getActiveWorksheetIndex()]); });
+	// A copy of the active sheet before it, named as web-apps' "Copy" names it ("Sheet1 (2)"), active
+	engine["duplicateSheet"] = edit(function () {
+		var index = api.asc_getActiveWorksheetIndex();
+		var names = [];
+		for (var i = 0; i < api.asc_getWorksheetsCount(); i++)
+			names.push(api.asc_getWorksheetName(i).toLowerCase());
+		var original = api.asc_getWorksheetName(index);
+		var numbered = /^(.*)\((\d+)\)$/.exec(original);
+		var first = numbered ? numbered[1] : original + " ";
+		var name;
+		for (var n = 2; n < 1000; n++) {
+			name = first + "(" + n + ")";
+			if (names.indexOf(name.toLowerCase()) < 0)
+				break;
+		}
+		api.asc_copyWorksheet(index, name);
+	});
 	engine["hideSheet"] = edit(function () { api.asc_hideWorksheet([api.asc_getActiveWorksheetIndex()]); });
 	engine["showSheet"] = edit(function (index) { api.asc_showWorksheet(index); });
 

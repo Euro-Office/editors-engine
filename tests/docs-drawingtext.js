@@ -12,7 +12,8 @@ function shapeText(shape) {
 }
 t.run("a picture", function () {
 	click(0, 40, 17); // "Your Logo"
-	t.eq("selected", t.state().drawings.length, 1);
+	var drawings = t.state().drawings;
+	t.eq("a picture selected", drawings.length === 1 && drawings[0].kind, "picture");
 	eoEngine.commitText("Logo ");
 	t.eq("all of the text next to it", documentText().indexOf("Logo Text Editors"), 0);
 	t.eq("typed in the text", JSON.parse(eoEngine.getTextContext()).text.indexOf("Logo "), 1);
